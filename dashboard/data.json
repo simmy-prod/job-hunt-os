@@ -1,0 +1,7 @@
+{
+  "stages": ["Researching", "Applied", "Screen", "Interview", "Final", "Offer", "Closed"],
+  "applications": [
+    { "id": "example-co", "company": "Example Co", "role": "AI-Native Software Engineer", "stage": "Researching", "applied_date": "", "source_url": "https://example.com/careers", "contact": "", "next_action": "Run company-deep-dive", "next_action_date": "2026-09-03" }
+  ],
+  "generated_at": "2026-09-02T00:00:00.000Z"
+}

@@ -1,0 +1,15 @@
+# --- Private layer: never pushed ---
+profile/
+pipeline/
+prep/
+targets/notion-cache.json
+
+# Node
+node_modules/
+dashboard/data.local.json
+
+# OS / editor
+.DS_Store
+*.log
+.env
+.env.local
