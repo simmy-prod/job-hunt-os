@@ -13,3 +13,4 @@ dashboard/data.local.json
 *.log
 .env
 .env.local
+.vercel
