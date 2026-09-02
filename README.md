@@ -37,7 +37,7 @@ so nothing gets dropped and every interview walks in prepared.
 |---|---|---|
 | **Brain** | `profile/` — STAR stories, skills matrix, interview answers | No (private) |
 | **Machine** | `.claude/skills`, `.claude/commands`, `dashboard/`, `scripts/` | **Yes — this is the showcase** |
-| **Pipeline** | Notion DB (truth) + `pipeline/`, `prep/`, `targets/` (local sync) | No (private) |
+| **Pipeline** | Notion DB (truth) + `pipeline/`, `prep/`, `targets/` (all local, gitignored) | No (private) |
 
 The public repo is the engineering: skills, automation, dashboard code. The private
 data (who I am, who I'm talking to, what I said in an interview) stays local.

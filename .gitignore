@@ -2,7 +2,7 @@
 profile/
 pipeline/
 prep/
-targets/notion-cache.json
+targets/
 
 # Node
 node_modules/
