@@ -60,7 +60,7 @@ Plus `/morning-hunt` — the daily driver: scan → surface new matches + today'
 Kanban board (`Researching → Applied → Screen → Interview → Final → Offer/Closed`),
 generated from `pipeline/*.md` frontmatter, deployed live on Vercel.
 
-**Live:** _(link added after first deploy)_
+**Live:** [job-hunt-os-one.vercel.app](https://job-hunt-os-one.vercel.app) _(sample data — real pipeline stays local/private)_
 
 ## Stack
 
