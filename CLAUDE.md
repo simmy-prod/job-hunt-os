@@ -37,6 +37,13 @@ prep or application task.
   `company, role, stage, applied_date, source_url, contact, next_action, next_action_date`.
 - One folder per company in `prep/<company-slug>/`: `research.md`,
   `interviewer-brief.md`, `questions.md`.
+- Whenever prepping a cover note or tailored resume for a real application,
+  also write `prep/<company-slug>/gpt-prompt.md`: a self-contained, engineered
+  prompt Simmy can paste into ChatGPT (GPT Go) to generate or refine that
+  cover note or resume himself. Ground it only in facts already in `profile/`
+  and the target job ad, state the no-em-dash/en-dash rule explicitly inside
+  the prompt, and never fabricate experience, numbers, or skills beyond what's
+  given.
 - Dashboard rebuilds from `pipeline/*.md` via `scripts/build-dashboard.mjs`. Never
   hand-edit `dashboard/data.json`.
 - Never mark an application "Applied" in the pipeline without Simmy confirming he
