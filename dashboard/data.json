@@ -1,7 +1,161 @@
 {
+  "_note": "Fictional sample data for the public demo deploy. Real pipeline data lives in dashboard/data.local.json, which is gitignored and never leaves the local machine. Regenerate that with: npm run build",
   "stages": ["Researching", "Applied", "Screen", "Interview", "Final", "Offer", "Closed"],
   "applications": [
-    { "id": "example-co", "company": "Example Co", "role": "AI-Native Software Engineer", "stage": "Researching", "applied_date": "", "source_url": "https://example.com/careers", "contact": "", "next_action": "Run company-deep-dive", "next_action_date": "2026-09-03" }
+    {
+      "id": "northwind-labs",
+      "company": "Northwind Labs",
+      "role": "AI-Native Software Engineer",
+      "stage": "Researching",
+      "applied_date": "",
+      "source_url": "https://jobs.example.org/northwind-labs/ai-native-swe",
+      "contact": "",
+      "next_action": "Run company-deep-dive",
+      "next_action_date": "2026-09-05"
+    },
+    {
+      "id": "meridian-ai",
+      "company": "Meridian AI",
+      "role": "AI Solutions Engineer",
+      "stage": "Researching",
+      "applied_date": "",
+      "source_url": "https://example.com/meridian-ai/careers/solutions-engineer",
+      "contact": "",
+      "next_action": "Draft tailored resume, then apply",
+      "next_action_date": "2026-09-10"
+    },
+    {
+      "id": "harbour-coast-digital",
+      "company": "Harbour and Coast Digital",
+      "role": "AI-Native Front-end Designer",
+      "stage": "Researching",
+      "applied_date": "",
+      "source_url": "https://jobs.example.org/harbour-coast/frontend-designer",
+      "contact": "",
+      "next_action": "Check portfolio fit against their public work",
+      "next_action_date": "2026-09-12"
+    },
+    {
+      "id": "kestrel-software",
+      "company": "Kestrel Software",
+      "role": "Junior Full-stack Developer",
+      "stage": "Applied",
+      "applied_date": "2026-09-01",
+      "source_url": "https://example.com/kestrel/jobs/junior-fullstack",
+      "contact": "Priya Nand, Talent Partner",
+      "next_action": "Follow up if no response by end of week",
+      "next_action_date": "2026-09-08"
+    },
+    {
+      "id": "parkside-council",
+      "company": "Parkside City Council",
+      "role": "Service Desk Analyst",
+      "stage": "Applied",
+      "applied_date": "2026-08-28",
+      "source_url": "https://jobs.example.org/parkside-council/service-desk-analyst",
+      "contact": "",
+      "next_action": "Follow up on application status",
+      "next_action_date": "2026-09-11"
+    },
+    {
+      "id": "ironbark-data",
+      "company": "Ironbark Data",
+      "role": "Administration Assistant (part-time)",
+      "stage": "Applied",
+      "applied_date": "2026-09-03",
+      "source_url": "https://example.com/ironbark-data/admin-assistant-pt",
+      "contact": "",
+      "next_action": "Follow up if no response within two weeks",
+      "next_action_date": "2026-09-17"
+    },
+    {
+      "id": "lumen-systems",
+      "company": "Lumen Systems",
+      "role": "AI-Native Software Engineer",
+      "stage": "Screen",
+      "applied_date": "2026-08-22",
+      "source_url": "https://example.com/lumen-systems/careers/ai-native-swe",
+      "contact": "Dan OuYang, Recruiter",
+      "next_action": "Recruiter call, prep with drill recruiter",
+      "next_action_date": "2026-09-09"
+    },
+    {
+      "id": "verdant-studio",
+      "company": "Verdant Studio",
+      "role": "AI-Native Front-end Designer",
+      "stage": "Screen",
+      "applied_date": "2026-08-25",
+      "source_url": "https://jobs.example.org/verdant-studio/frontend-designer",
+      "contact": "Alex Marchetti",
+      "next_action": "Send availability for a first call",
+      "next_action_date": "2026-09-08"
+    },
+    {
+      "id": "atlas-freight",
+      "company": "Atlas Freight Co",
+      "role": "IT Support Officer",
+      "stage": "Interview",
+      "applied_date": "2026-08-15",
+      "source_url": "https://example.com/atlas-freight/it-support-officer",
+      "contact": "Marika Toomey, IT Manager",
+      "next_action": "Panel interview, run company-deep-dive and interviewer-recon",
+      "next_action_date": "2026-09-10"
+    },
+    {
+      "id": "sandpiper-interactive",
+      "company": "Sandpiper Interactive",
+      "role": "AI-Native Software Engineer",
+      "stage": "Interview",
+      "applied_date": "2026-08-11",
+      "source_url": "https://jobs.example.org/sandpiper/ai-native-swe",
+      "contact": "Ben Faletau, Engineering Lead",
+      "next_action": "Technical interview, drill technical on their stack",
+      "next_action_date": "2026-09-12"
+    },
+    {
+      "id": "quokka-cloud",
+      "company": "Quokka Cloud",
+      "role": "Associate Developer (AI tooling)",
+      "stage": "Final",
+      "applied_date": "2026-08-04",
+      "source_url": "https://example.com/quokka-cloud/associate-developer",
+      "contact": "Sana Wickramasinghe, Head of Engineering",
+      "next_action": "Final round with two founders, prep leadership stories",
+      "next_action_date": "2026-09-15"
+    },
+    {
+      "id": "tessellate",
+      "company": "Tessellate",
+      "role": "AI-Native Front-end Developer",
+      "stage": "Offer",
+      "applied_date": "2026-07-29",
+      "source_url": "https://jobs.example.org/tessellate/frontend-developer",
+      "contact": "Jordan Pak, Co-founder",
+      "next_action": "Review offer terms, compare against salary floor",
+      "next_action_date": "2026-09-09"
+    },
+    {
+      "id": "blue-ridge-health",
+      "company": "Blue Ridge Health",
+      "role": "Junior Application Support",
+      "stage": "Closed",
+      "applied_date": "2026-08-06",
+      "source_url": "https://example.com/blue-ridge-health/junior-app-support",
+      "contact": "",
+      "next_action": "Closed: rejected after screen, no role fit on shift work",
+      "next_action_date": ""
+    },
+    {
+      "id": "granite-analytics",
+      "company": "Granite Analytics",
+      "role": "Data Operations Assistant",
+      "stage": "Closed",
+      "applied_date": "2026-08-19",
+      "source_url": "https://jobs.example.org/granite-analytics/data-ops-assistant",
+      "contact": "",
+      "next_action": "Closed: withdrew, on-site only and outside commute range",
+      "next_action_date": ""
+    }
   ],
-  "generated_at": "2026-09-02T00:00:00.000Z"
+  "generated_at": "2026-09-08T00:00:00.000Z"
 }

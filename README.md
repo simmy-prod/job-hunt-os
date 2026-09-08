@@ -60,12 +60,57 @@ Plus `/morning-hunt` - the daily driver: scan → surface new matches + today's 
 Kanban board (`Researching → Applied → Screen → Interview → Final → Offer/Closed`),
 generated from `pipeline/*.md` frontmatter, deployed live on Vercel.
 
-**Live:** [job-hunt-os-one.vercel.app](https://job-hunt-os-one.vercel.app) _(sample data - real pipeline stays local/private)_
+**Live:** [job-hunt-os-one.vercel.app](https://job-hunt-os-one.vercel.app) _(interactive demo on fictional sample data; the real pipeline stays local and private)_
 
 ## Stack
 
 Claude Code (skills + commands), Notion (source of truth for targets/pipeline),
 Claude in Chrome (job board + LinkedIn research), static HTML/JS dashboard on Vercel.
+
+## Run it yourself
+
+This was built for one job search, but the machine layer is generic. To point it
+at your own:
+
+**Prerequisites:** [Claude Code](https://claude.com/claude-code), Node.js 18+.
+Optional: a Notion database for target companies, a Vercel account to host your
+own dashboard.
+
+**Setup:**
+
+1. Clone the repo, then `npm install` (there are no dependencies; this just
+   enables the `npm` scripts).
+2. Create the private layer from the starter files: follow
+   [`templates/README.md`](templates/README.md). The `profile/`, `pipeline/`,
+   `prep/`, and `targets/` directories are gitignored, so you build them locally.
+3. Fill `targets/search-criteria.md` by hand (roles, location, salary floor,
+   dealbreakers, working rights).
+4. Run the `profile-interview` skill in Claude Code. It interviews you and writes
+   `profile/` (STAR stories, skills matrix, headline pitch). Everything else is
+   only as good as this step.
+5. If you use Notion, set up the target database and record its id in
+   `targets/notion-db.md` (fields listed in that template). If you do not,
+   `job-scan` and `/log-app` still work against `pipeline/*.md` alone.
+
+**Daily use:** run `/morning-hunt` in Claude Code. Scan for new matches, surface
+follow-ups due today, one interview-drill rep.
+
+**View your pipeline:**
+
+```bash
+npm start
+```
+
+Builds `dashboard/data.local.json` from your `pipeline/*.md` and serves the board
+at http://localhost:8000 (badge: "live pipeline data"). It must be served, not
+opened as a `file://` path, or the browser blocks the data fetch and the page
+falls back to sample data.
+
+**Deploy your own dashboard (optional):** point Vercel at the repo with
+`outputDirectory` set to `dashboard/` (see [`vercel.json`](vercel.json)). Only
+`dashboard/data.json` is committed and deployed; your real `data.local.json` is
+gitignored and never leaves your machine. Replace `data.json` with your own
+fictional showcase set, or leave the sample in place.
 
 ## Status
 

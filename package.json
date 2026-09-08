@@ -1,0 +1,15 @@
+{
+  "name": "job-hunt-os",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-operated job search system driven by Claude Code. Dashboard build + local viewer.",
+  "scripts": {
+    "build": "node scripts/build-dashboard.mjs",
+    "serve": "node scripts/serve-dashboard.mjs",
+    "start": "npm run build && npm run serve"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

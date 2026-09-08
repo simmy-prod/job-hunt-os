@@ -66,3 +66,4 @@ writeFileSync(
   JSON.stringify({ stages: STAGES, applications, generated_at: new Date().toISOString() }, null, 2)
 );
 console.log(`Wrote ${applications.length} application(s) to ${outFile}`);
+console.log("View it:  npm start   (or: cd dashboard && python3 -m http.server 8000)");

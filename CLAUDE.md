@@ -49,6 +49,12 @@ Re-run it whenever a new accomplishment happens (append, don't re-interview).
   `ai-native` - targeted rehearsal, straight into that mode, no menu.
 - `/post-mortem` - immediately after an interview, while it is fresh.
 
+**Viewing the dashboard:** `npm start` from the repo root runs the build (writes
+`dashboard/data.local.json` from `pipeline/*.md`) then serves it at
+http://localhost:8000 (badge "live pipeline data"). It must be served, not opened
+as a `file://` path, or the page falls back to sample data. This is local only;
+the Vercel deploy always renders `dashboard/data.json` (fictional sample).
+
 ## Conventions
 
 - One `.md` file per accomplishment in `profile/accomplishments/`, STAR format
