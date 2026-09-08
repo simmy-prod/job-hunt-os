@@ -69,7 +69,10 @@ the Vercel deploy always renders `dashboard/data.json` (fictional sample).
   when `Last Checked` is more than 7 days old, and skips any row already checked
   today. It writes `Last Checked` = today on every row it opens.
 - New `pipeline/` entries default to stage `Researching`. `/log-app` only sets
-  `Applied` after Simmy confirms he actually submitted (see rule below).
+  `Applied` after Simmy confirms he actually submitted (see rule below). Valid
+  stages: `Researching`, `Applied`, `Screen`, `Interview`, `Final`, `Offer`,
+  `Closed`. `Not a fit` (any casing) is accepted too and renders in the `Closed`
+  column; anything else falls back to `Researching`.
 - One folder per company in `prep/<company-slug>/`: `research.md`,
   `interviewer-brief.md`, `questions.md`.
 - Whenever prepping a cover note or tailored resume for a real application,

@@ -65,6 +65,16 @@ const STAGE_META = {
   Closed:      { color: "var(--stage-closed)" },
 };
 
+// Stage values that map onto an existing column rather than getting their own.
+// Keys are lower-cased. "Not a fit" is a closed outcome, shown under Closed.
+const STAGE_ALIASES = { "not a fit": "Closed" };
+
+function columnFor(stage, stages) {
+  if (stages.includes(stage)) return stage;
+  const alias = STAGE_ALIASES[String(stage || "").trim().toLowerCase()];
+  return alias && stages.includes(alias) ? alias : stages[0];
+}
+
 async function loadData() {
   // Real local data first (gitignored, never leaves this machine's dashboard build).
   try {
@@ -85,7 +95,7 @@ function render(data, mode) {
   const stages = data.stages || Object.keys(STAGE_META);
   const byStage = Object.fromEntries(stages.map((s) => [s, []]));
   for (const app of data.applications || []) {
-    (byStage[app.stage] || byStage[stages[0]]).push(app);
+    byStage[columnFor(app.stage, stages)].push(app);
   }
 
   board.innerHTML = "";

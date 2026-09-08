@@ -23,6 +23,18 @@ const STAGES = [
   "Closed",
 ];
 
+// Accepted stage values that are not columns of their own. Key is lower-cased.
+// "Not a fit" (any casing) is a closed outcome and shows in the Closed column.
+const STAGE_ALIASES = {
+  "not a fit": "Closed",
+};
+
+function normalizeStage(raw) {
+  if (!raw) return "Researching";
+  if (STAGES.includes(raw)) return raw;
+  return STAGE_ALIASES[raw.trim().toLowerCase()] || "Researching";
+}
+
 function parseFrontmatter(raw) {
   const match = raw.match(/^---\n([\s\S]*?)\n---/);
   if (!match) return null;
@@ -49,7 +61,7 @@ function loadApplications() {
         id: f.replace(/\.md$/, ""),
         company: fm.company || f.replace(/\.md$/, ""),
         role: fm.role || "",
-        stage: STAGES.includes(fm.stage) ? fm.stage : "Researching",
+        stage: normalizeStage(fm.stage),
         applied_date: fm.applied_date || "",
         source_url: fm.source_url || "",
         contact: fm.contact || "",
