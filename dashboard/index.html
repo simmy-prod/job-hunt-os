@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Job Hunt OS — Pipeline</title>
+<title>Job Hunt OS - Pipeline</title>
 <style>
   :root{
     --bg:#f7f6f3; --card:#ffffff; --ink:#1c1b1a; --sub:#6b6863; --line:#e6e3dd;
@@ -47,7 +47,7 @@
 <header>
   <div>
     <h1>Job Hunt OS</h1>
-    <p>Pipeline, Kanban-style — generated from <code>pipeline/*.md</code></p>
+    <p>Pipeline, Kanban-style - generated from <code>pipeline/*.md</code></p>
   </div>
   <span class="badge" id="modeBadge">loading…</span>
 </header>
@@ -79,7 +79,7 @@ function render(data, mode) {
   const board = document.getElementById("board");
   const badge = document.getElementById("modeBadge");
   const gen = document.getElementById("generatedAt");
-  badge.textContent = mode === "live" ? "live pipeline data" : "sample data — demo only";
+  badge.textContent = mode === "live" ? "live pipeline data" : "sample data - demo only";
   gen.textContent = data.generated_at ? `Generated ${new Date(data.generated_at).toLocaleString()}` : "";
 
   const stages = data.stages || Object.keys(STAGE_META);

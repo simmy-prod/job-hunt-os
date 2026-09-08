@@ -18,16 +18,36 @@ prep or application task.
    flag the gap, don't fabricate.
 2. **`.claude/`, `dashboard/`, `scripts/`**: public, the showcase. Keep this code
    clean and documented; it's read by employers.
-3. **`pipeline/`, `prep/`, Notion**: private working data. Notion DB is the source
-   of truth for company targets and application stage; `pipeline/*.md` is a local
-   cache synced from it for the dashboard build.
+3. **`pipeline/`, `prep/`, Notion**: private working data. Notion is the source
+   of truth for company targets and application stage. There is no automatic
+   Notion-to-local sync, so any skill that changes a stage (`job-scan`,
+   `/log-app`, `/post-mortem`) must write that change to BOTH the Notion row and
+   the matching `pipeline/*.md` in the same pass, or the two drift.
+   `pipeline/*.md` is the local cache the dashboard builds from.
 
-## Daily loop
+## Workflows
 
-`/morning-hunt` is the default entry point most days:
-1. Run `job-scan` against the Notion target DB.
-2. Report new matches + anything due a follow-up today.
-3. Run one round of `interview-drill` on the weakest logged story.
+**First-time setup:** run `profile-interview` before anything else. Every other
+skill reads `profile/`; if it is empty they all degrade to generic output.
+Re-run it whenever a new accomplishment happens (append, don't re-interview).
+
+**Daily:** `/morning-hunt` is the default entry point.
+1. `job-scan` against the Notion target DB, report new matches. `job-scan` only
+   opens rows actually due a check (see the `Check Frequency` convention below),
+   so it is cheap to re-run.
+2. List `pipeline/*.md` whose `next_action_date` <= today.
+3. One `interview-drill` round (3-5 Q) against the lowest-confidence skill in
+   `profile/skills-matrix.md`, or the soonest upcoming interview if prep exists.
+   Skip step 3 on a busy day; steps 1-2 are the part that must not lapse.
+
+**Per application / interview:**
+- `/log-app` - log a new application to Notion + `pipeline/` + rebuild dashboard.
+- `company-deep-dive` - once an interview is booked, a few days out. Heavy
+  (runs `deep-research`); never wire it into the daily loop.
+- `interviewer-recon` - once an interviewer's name is known.
+- `/drill <mode>` where mode is `recruiter`, `hiring-manager`, `technical`, or
+  `ai-native` - targeted rehearsal, straight into that mode, no menu.
+- `/post-mortem` - immediately after an interview, while it is fresh.
 
 ## Conventions
 
@@ -35,6 +55,15 @@ prep or application task.
   (Situation / Task / Action / Result), tagged with which skills it demonstrates.
 - One `.md` file per application in `pipeline/`, YAML frontmatter:
   `company, role, stage, applied_date, source_url, contact, next_action, next_action_date`.
+- When `job-scan` opens a new `pipeline/` entry for a match, set
+  `next_action: Run company-deep-dive` and `next_action_date` 2-3 days out, so
+  the match resurfaces in `/morning-hunt` step 2 instead of going silent.
+- Notion target rows carry a `Check Frequency` field (`daily` / `weekly`,
+  default weekly). `job-scan` scans `daily` rows every run and `weekly` rows only
+  when `Last Checked` is more than 7 days old, and skips any row already checked
+  today. It writes `Last Checked` = today on every row it opens.
+- New `pipeline/` entries default to stage `Researching`. `/log-app` only sets
+  `Applied` after Simmy confirms he actually submitted (see rule below).
 - One folder per company in `prep/<company-slug>/`: `research.md`,
   `interviewer-brief.md`, `questions.md`.
 - Whenever prepping a cover note or tailored resume for a real application,
@@ -44,8 +73,12 @@ prep or application task.
   and the target job ad, state the no-em-dash/en-dash rule explicitly inside
   the prompt, and never fabricate experience, numbers, or skills beyond what's
   given.
-- Dashboard rebuilds from `pipeline/*.md` via `scripts/build-dashboard.mjs`. Never
-  hand-edit `dashboard/data.json`.
+- `scripts/build-dashboard.mjs` reads `pipeline/*.md` and writes
+  `dashboard/data.local.json` (gitignored, real data; the dashboard fetches it
+  first and falls back to sample). Never hand-edit `data.local.json`.
+  `dashboard/data.json` is hand-maintained sample data for the public Vercel
+  deploy, keep it fake. Re-run the build after any `pipeline/` change
+  (`/log-app` and `/post-mortem` already do).
 - Never mark an application "Applied" in the pipeline without Simmy confirming he
   actually submitted it.
 
