@@ -1,6 +1,6 @@
 # Job Hunt OS
 
-A self-operated system for running a job search like a product — built and maintained
+A self-operated system for running a job search like a product - built and maintained
 using [Claude Code](https://claude.com/claude-code) as the daily driver.
 
 Built by Simmy, a fresh grad job-hunting in Melbourne, AU for AI-native engineering /
@@ -25,7 +25,7 @@ so nothing gets dropped and every interview walks in prepared.
 └─────────────┘     └──────────────────┘
                             │
                      ┌──────┴──────┐
-                     │  profile/    │  private — accomplishments,
+                     │  profile/    │  private - accomplishments,
                      │  pipeline/   │  applications, prep docs
                      │  prep/       │  (gitignored, local only)
                      └─────────────┘
@@ -35,8 +35,8 @@ so nothing gets dropped and every interview walks in prepared.
 
 | Layer | What | Tracked in git? |
 |---|---|---|
-| **Brain** | `profile/` — STAR stories, skills matrix, interview answers | No (private) |
-| **Machine** | `.claude/skills`, `.claude/commands`, `dashboard/`, `scripts/` | **Yes — this is the showcase** |
+| **Brain** | `profile/` - STAR stories, skills matrix, interview answers | No (private) |
+| **Machine** | `.claude/skills`, `.claude/commands`, `dashboard/`, `scripts/` | **Yes - this is the showcase** |
 | **Pipeline** | Notion DB (truth) + `pipeline/`, `prep/`, `targets/` (all local, gitignored) | No (private) |
 
 The public repo is the engineering: skills, automation, dashboard code. The private
@@ -52,7 +52,7 @@ data (who I am, who I'm talking to, what I said in an interview) stays local.
 | `company-deep-dive` | Deep research on a company pre-interview → prep doc + expert-level questions |
 | `interview-drill` | Mock interview by type (recruiter / hiring manager / technical / AI-native), scores + coaches answers |
 
-Plus `/morning-hunt` — the daily driver: scan → surface new matches + today's follow-ups
+Plus `/morning-hunt` - the daily driver: scan → surface new matches + today's follow-ups
 → one drill rep.
 
 ## Dashboard
@@ -60,7 +60,7 @@ Plus `/morning-hunt` — the daily driver: scan → surface new matches + today'
 Kanban board (`Researching → Applied → Screen → Interview → Final → Offer/Closed`),
 generated from `pipeline/*.md` frontmatter, deployed live on Vercel.
 
-**Live:** [job-hunt-os-one.vercel.app](https://job-hunt-os-one.vercel.app) _(sample data — real pipeline stays local/private)_
+**Live:** [job-hunt-os-one.vercel.app](https://job-hunt-os-one.vercel.app) _(sample data - real pipeline stays local/private)_
 
 ## Stack
 
@@ -69,4 +69,4 @@ Claude in Chrome (job board + LinkedIn research), static HTML/JS dashboard on Ve
 
 ## Status
 
-🚧 Actively in use — this is a running system, not a finished snapshot.
+🚧 Actively in use - this is a running system, not a finished snapshot.

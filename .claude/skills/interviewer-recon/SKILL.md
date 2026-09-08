@@ -24,9 +24,9 @@ Purpose: walk into the room already knowing what this specific person values.
 
 ## Rules
 
-- Public profile info only — no scraping behind a login wall beyond Simmy's own
+- Public profile info only - no scraping behind a login wall beyond Simmy's own
   normal LinkedIn access.
-- Never message, connect with, or comment on the interviewer's content — recon
+- Never message, connect with, or comment on the interviewer's content - recon
   only, this stays passive.
 - If the profile is locked down / low signal, say so plainly rather than
   stretching thin material into a false-confidence brief.

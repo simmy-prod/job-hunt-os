@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Reads pipeline/*.md (YAML frontmatter), writes dashboard/data.local.json.
-// (data.local.json is gitignored — it holds real application data. The
+// (data.local.json is gitignored - it holds real application data. The
 // committed dashboard/data.json is sample-only, for the public demo deploy.)
 // Run: node scripts/build-dashboard.mjs
 
