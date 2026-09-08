@@ -16,7 +16,8 @@ Field rules:
 
 - `stage`: one of `Researching`, `Applied`, `Screen`, `Interview`, `Final`,
   `Offer`, `Closed`. New entries start at `Researching`. Only move to `Applied`
-  once you have actually submitted.
+  once you have actually submitted. `Not a fit` (any casing) is also accepted and
+  is shown in the `Closed` column.
 - `applied_date` / `next_action_date`: `YYYY-MM-DD`, or `""` if not set.
   `/morning-hunt` surfaces any entry whose `next_action_date` is today or past.
 - `next_action`: the single next thing to do. `job-scan` sets this to
