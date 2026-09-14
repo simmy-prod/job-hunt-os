@@ -5,10 +5,16 @@ This repo runs Simmy's job search. Read this before touching anything in here.
 ## Who Simmy is
 
 Fresh grad, Melbourne AU, ex-Ragpiq (AI skills built there). Needs stable income now.
-Targeting: IT Desk, AI-Native Software Engineer/Developer, AI-Native Front-end
-Designer, and adjacent roles that lean heavily on AI tooling. Full detail lives in
-`profile/master-profile.md` and `targets/search-criteria.md`. Read both before any
-prep or application task.
+Targeting: Business Analyst, Administration/Coordinator, and adjacent non-coding
+roles, ideally ones that value strong AI-tool fluency without expecting him to
+write production code. Full detail lives in `profile/master-profile.md` and
+`targets/search-criteria.md`. Read both before any prep or application task.
+
+**Coding is out of scope here.** Simmy's software engineering / front-end skills
+are the domain of his separate SimmyProd persona (content creation and product
+design). This repo's search, resume prep, and interview drills should never push
+toward AI-Native Software Engineer/Developer or similar code-heavy roles, even
+though the profile data may still list Ragpiq coding work as a past accomplishment.
 
 ## The three layers: don't cross them
 

@@ -14,11 +14,14 @@ well, under pressure, out loud."
    expectations, availability, why this role, why leaving/left last thing.
 2. **`hiring-manager`** - behavioral, STAR-driven, digs into ownership and
    judgment calls. Pulls from `profile/accomplishments/`.
-3. **`technical`** - role-specific skills questions (pull the stack from the
-   target job listing / `prep/<company>/`), plus "explain how you'd build X."
-4. **`ai-native`** - specific to AI-heavy roles: how he actually uses AI tools
-   day-to-day, what he'd automate first, judgment about AI limitations/failure
-   modes, Ragpiq-specific deep questions.
+3. **`technical`** - role-specific skills questions (pull the required tools/
+   process from the target job listing / `prep/<company>/`, e.g. Excel/SQL/
+   reporting/process mapping - not coding), plus "walk me through how you'd
+   tackle X."
+4. **`ai-native`** - for roles that value AI-tool fluency: how he actually uses
+   AI tools day-to-day to work faster/smarter, judgment about AI limitations/
+   failure modes, Ragpiq-specific deep questions. Frame this as a differentiator
+   for a business/admin role, not as software engineering skill.
 
 ## Process
 

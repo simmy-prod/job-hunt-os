@@ -3,9 +3,10 @@
 A self-operated system for running a job search like a product - built and maintained
 using [Claude Code](https://claude.com/claude-code) as the daily driver.
 
-Built by Simmy, a fresh grad job-hunting in Melbourne, AU for AI-native engineering /
-front-end / IT roles. This repo *is* the search: the same AI workflow habits I'd bring
-into an AI-native role, applied to landing one.
+Built by Simmy, a fresh grad job-hunting in Melbourne, AU for Business Analyst,
+Admin, and adjacent non-coding roles (software/front-end work stays in his separate
+SimmyProd persona). This repo *is* the search: the same AI workflow habits I'd bring
+into a role that values them, applied to landing one.
 
 ## Why this exists
 

@@ -6,11 +6,13 @@ vague criteria produce noisy scans.
 ## Priority roles
 
 List the job titles you actually want, most wanted first. Include close variants
-so a scan does not miss a reworded title.
+so a scan does not miss a reworded title. Coding-heavy roles (software engineer,
+front-end developer, etc.) are out of scope for this search - that's SimmyProd
+territory, not this job hunt.
 
-- Example: AI-Native Software Engineer / AI Engineer / Applied AI Developer
-- Example: Front-end Developer (roles that expect heavy AI-tool use)
-- Example: IT Support / Service Desk Analyst
+- Example: Business Analyst / Junior Business Analyst
+- Example: Operations Coordinator / Business Operations Analyst
+- Example: IT Support / Service Desk Analyst (non-coding)
 
 ## Secondary / income-now roles
 

@@ -15,7 +15,9 @@ Run as a live conversation, not a form dump. One question at a time, follow up o
 vague answers, don't let a good story get flattened into a bullet point.
 
 ### Round 1 - orientation (5 min)
-- Current situation: what's urgent (stable income), what's the dream (AI-native role)
+- Current situation: what's urgent (stable income via a non-coding role, e.g.
+  Business Analyst or Admin). Coding-heavy targets are out of scope here - that's
+  SimmyProd's domain, not this search.
 - Confirm/update `targets/search-criteria.md` (roles, location, salary floor,
   dealbreakers, working rights)
 
@@ -30,8 +32,9 @@ Push past the first answer. "What was hard about that?" / "What would've happene
 if you hadn't caught that?" / "How did you actually build that, technically?" -
 generic answers make weak interview material; specific ones are gold.
 
-Tag each story with which skills it demonstrates (e.g. `ai-integration`,
-`debugging`, `ownership`, `communication`, `speed-of-learning`).
+Tag each story with which skills it demonstrates (e.g. `ai-tool-fluency`,
+`stakeholder-communication`, `ownership`, `process-documentation`,
+`speed-of-learning`).
 
 ### Round 3 - skills matrix
 Build `profile/skills-matrix.md`: skill → evidence (which story proves it) → how
