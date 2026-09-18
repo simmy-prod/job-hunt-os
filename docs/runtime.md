@@ -5,7 +5,8 @@ run through `npm run morning:plan` and `npm run doctor`. It is separate from
 the user-invoked Claude Code skills in `.claude/skills` (`job-scan`,
 `interviewer-recon`, `company-deep-dive`, `interview-drill`,
 `profile-interview`) and the `/morning-hunt` command that sequences them.
-This runtime makes no model or API calls; it is a plain Node.js program.
+This runtime makes no model or LLM API calls; it is a plain Node.js program.
+It does call the read-only Notion API (see "Read-only guarantees" below).
 
 ## Architecture
 
@@ -19,9 +20,15 @@ Two Snapshot sources feed a pure planner:
 Both produce a `Snapshot` validated against `src/domain.ts`'s Zod schemas.
 `src/planner.ts` turns a snapshot plus a clock and timezone into a
 deterministic `Plan` (due targets, follow-ups due today, and review items for
-ambiguous or malformed rows). `src/workflow.ts` wires source read, plan, and
-ledger recording together and is the code path both CLI commands call through
-`src/cli.ts`.
+ambiguous or malformed rows). `src/cli.ts` wires the two commands to that
+core differently:
+
+- `morning:plan` calls `src/workflow.ts`'s `runMorning`, which reads the
+  source, plans, and (unless `--no-record`) records the result to the
+  SQLite ledger.
+- `doctor` reads the source and calls `planMorning` directly. It never goes
+  through `runMorning` and never touches the ledger, by design: doctor is a
+  read-only diagnostic and must not create or update a run record.
 
 ## Node requirement
 
@@ -147,10 +154,25 @@ time the runtime runs. `.runtime/` is gitignored and never published.
 at mode `0600`, refuses to follow a symlink for either, and refuses to open
 a database file with more than one hard link. Each logical run key
 (`morning-plan:v1:<config hash>:<Melbourne business date>`) is recorded
-atomically: the `runs` table holds the latest state per key, and the
-append-only `events` table holds a history of outcomes. Neither table stores
-target names, URLs, tokens, notes, or raw provider error text, only status,
-timestamps, a plan hash, and an `AppError` code.
+atomically across two tables, and the two tables are **not** equally
+private:
+
+- `runs` holds the latest state per logical key, including `plan_json` (the
+  full serialized `Plan`) and `digest` (the rendered text digest) on a
+  success. Both of these **do contain business data**: company names,
+  careers URLs, role types, applications' next-action text, and source
+  URLs, exactly as they appear in the target/application snapshot. This is
+  intentional; it's what makes a recorded run auditable. A failure record
+  stores no `plan_json`/`digest`, only the `AppError` code.
+- `events` is append-only and holds only `logical_key`, `observed_at`,
+  `outcome`, and `error_code` per run, never the plan or digest content.
+  This table is the redacted one.
+
+Neither table ever stores `NOTION_TOKEN`, other credentials, or raw
+provider error text. But `.runtime/runs.sqlite` as a whole is private
+business data, not a sanitized audit log; treat it the same as `pipeline/`
+or `targets/`, never copy it into a publishable path, a handoff document,
+or chat.
 
 ## Read-only guarantees
 
@@ -164,8 +186,13 @@ Any other host, path, method, query string, credential-in-URL, or redirect
 target is blocked before the request leaves the process, with a `POLICY`
 error. The Notion API version is pinned (`NOTION_API_VERSION` in the same
 file) so a future Notion API change cannot silently alter behavior.
-Retries are bounded (at most two retries, capped at a 20-second total delay,
-honoring `Retry-After`) and only apply to transient response codes.
+Retries are bounded: at most two retries, only for transient response codes
+(429, 500, 502, 503, 504, 529). Each individual retry's delay is capped at
+20 seconds (honoring `Retry-After` when present, otherwise exponential
+backoff from 500ms); if the required delay for a given attempt exceeds that
+20-second cap, no retry happens for that attempt and the response is
+returned as-is. The cap applies per attempt, not as a total budget across
+both retries.
 
 ## Privacy boundary
 

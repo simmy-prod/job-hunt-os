@@ -35,10 +35,11 @@ so nothing gets dropped and every interview walks in prepared.
 Two layers do the daily work, and they're deliberately separate:
 
 - **Deterministic runtime** (`src/`, run via `npm run morning:plan` and
-  `npm run doctor`): a plain Node.js program, no model or API calls. Reads
-  the Notion target database read-only and computes which targets are due,
-  which follow-ups are due today, and which rows need human review. See
-  [`docs/runtime.md`](docs/runtime.md) for the full contract.
+  `npm run doctor`): a plain Node.js program, no model or LLM API calls.
+  It reads the Notion target database through Notion's read-only API and
+  computes which targets are due, which follow-ups are due today, and which
+  rows need human review. See [`docs/runtime.md`](docs/runtime.md) for the
+  full contract.
 - **Claude Code skills** (`.claude/skills`, `.claude/commands`): the
   user-invoked, judgment-requiring work the deterministic runtime doesn't
   do - scanning job boards, researching companies and interviewers, drilling

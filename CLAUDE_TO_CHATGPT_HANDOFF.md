@@ -10,7 +10,11 @@ allowlisted output, and both CLI commands work by hand with deterministic
 output against both the demo fixture and the live Notion Target Companies
 database. All work happened on a new branch,
 `feature/deterministic-morning-planner`, per the user's global git workflow
-rules; nothing was committed to `master`.
+rules; nothing was committed directly to `master` at the time of this
+summary. **This is a historical snapshot of that original handoff, not the
+current state**: that branch became [PR #5](https://github.com/simmy-prod/job-hunt-os/pull/5),
+which has since been reviewed and merged into `master`. See "Recommended
+next step" below for the current, up-to-date status.
 
 **Update after initial handoff:** Simmy created a standalone `NOTION_TOKEN`,
 shared the Target Companies data source with it directly, and built
