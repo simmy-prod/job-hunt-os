@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "timezone": "Australia/Melbourne",
+  "source": {
+    "driver": "notion",
+    "dataSourceId": "11111111-1111-4111-8111-111111111111",
+    "tokenEnv": "NOTION_TOKEN",
+    "fields": {
+      "company": "Company",
+      "watchStatus": "Watch Status",
+      "careersUrl": "Careers URL",
+      "roleTypes": "Role Type",
+      "roleTypesType": "multi_select",
+      "lastChecked": "Last Checked",
+      "pipelineStage": "Pipeline Stage",
+      "nextAction": "Next Action",
+      "nextActionDate": "Next Action Date",
+      "role": null,
+      "appliedDate": null,
+      "sourceUrl": null
+    },
+    "frequency": {
+      "mode": "property",
+      "property": "Check Frequency",
+      "emptyDefault": "weekly"
+    }
+  }
+}

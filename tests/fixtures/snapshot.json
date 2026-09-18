@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "targets": [
+    {"id":"target-northwind","company":"Northwind Example","kind":"company","watchStatus":"Active watch","careersUrl":"https://jobs.example.org/northwind","roleTypes":["IT Desk"],"checkFrequency":"daily","lastChecked":"2026-09-17"},
+    {"id":"target-meridian","company":"Meridian Example","kind":"company","watchStatus":"Active watch","careersUrl":"https://jobs.example.org/meridian","roleTypes":["AI-Native SWE"],"checkFrequency":"weekly","lastChecked":"2026-09-11"},
+    {"id":"target-search","company":"[Saved Search] Example Admin","kind":"saved_search","watchStatus":"Active watch","careersUrl":"https://jobs.example.org/search","roleTypes":["Part-time Admin"],"checkFrequency":"weekly","lastChecked":null}
+  ],
+  "applications": [
+    {"id":"application-example-one","company":"Example Studio","role":"Service Desk Analyst","stage":"Applied","appliedDate":"2026-09-01","sourceUrl":"https://jobs.example.org/studio/one","nextAction":"Review whether a follow-up is appropriate","nextActionDate":"2026-09-17"},
+    {"id":"application-example-two","company":"Example Studio","role":"Support Engineer","stage":"Researching","appliedDate":null,"sourceUrl":"https://jobs.example.org/studio/two","nextAction":"Review the role requirements","nextActionDate":"2026-09-18"}
+  ]
+}
