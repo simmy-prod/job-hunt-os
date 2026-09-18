@@ -5,10 +5,10 @@
     {
       "id": "northwind-labs",
       "company": "Northwind Labs",
-      "role": "AI-Native Software Engineer",
+      "role": "Junior Business Analyst",
       "stage": "Researching",
       "applied_date": "",
-      "source_url": "https://jobs.example.org/northwind-labs/ai-native-swe",
+      "source_url": "https://jobs.example.org/northwind-labs/junior-business-analyst",
       "contact": "",
       "next_action": "Run company-deep-dive",
       "next_action_date": "2026-09-05"
@@ -16,10 +16,10 @@
     {
       "id": "meridian-ai",
       "company": "Meridian AI",
-      "role": "AI Solutions Engineer",
+      "role": "Business Operations Analyst",
       "stage": "Researching",
       "applied_date": "",
-      "source_url": "https://example.com/meridian-ai/careers/solutions-engineer",
+      "source_url": "https://example.com/meridian-ai/careers/operations-analyst",
       "contact": "",
       "next_action": "Draft tailored resume, then apply",
       "next_action_date": "2026-09-10"
@@ -27,21 +27,21 @@
     {
       "id": "harbour-coast-digital",
       "company": "Harbour and Coast Digital",
-      "role": "AI-Native Front-end Designer",
+      "role": "Operations Coordinator",
       "stage": "Researching",
       "applied_date": "",
-      "source_url": "https://jobs.example.org/harbour-coast/frontend-designer",
+      "source_url": "https://jobs.example.org/harbour-coast/operations-coordinator",
       "contact": "",
-      "next_action": "Check portfolio fit against their public work",
+      "next_action": "Check company fit against their public work",
       "next_action_date": "2026-09-12"
     },
     {
       "id": "kestrel-software",
       "company": "Kestrel Software",
-      "role": "Junior Full-stack Developer",
+      "role": "Business Analyst (Junior)",
       "stage": "Applied",
       "applied_date": "2026-09-01",
-      "source_url": "https://example.com/kestrel/jobs/junior-fullstack",
+      "source_url": "https://example.com/kestrel/jobs/junior-business-analyst",
       "contact": "Priya Nand, Talent Partner",
       "next_action": "Follow up if no response by end of week",
       "next_action_date": "2026-09-08"
@@ -71,10 +71,10 @@
     {
       "id": "lumen-systems",
       "company": "Lumen Systems",
-      "role": "AI-Native Software Engineer",
+      "role": "Business Analyst",
       "stage": "Screen",
       "applied_date": "2026-08-22",
-      "source_url": "https://example.com/lumen-systems/careers/ai-native-swe",
+      "source_url": "https://example.com/lumen-systems/careers/business-analyst",
       "contact": "Dan OuYang, Recruiter",
       "next_action": "Recruiter call, prep with drill recruiter",
       "next_action_date": "2026-09-09"
@@ -82,10 +82,10 @@
     {
       "id": "verdant-studio",
       "company": "Verdant Studio",
-      "role": "AI-Native Front-end Designer",
+      "role": "Administration Coordinator",
       "stage": "Screen",
       "applied_date": "2026-08-25",
-      "source_url": "https://jobs.example.org/verdant-studio/frontend-designer",
+      "source_url": "https://jobs.example.org/verdant-studio/admin-coordinator",
       "contact": "Alex Marchetti",
       "next_action": "Send availability for a first call",
       "next_action_date": "2026-09-08"
@@ -104,32 +104,32 @@
     {
       "id": "sandpiper-interactive",
       "company": "Sandpiper Interactive",
-      "role": "AI-Native Software Engineer",
+      "role": "Business Analyst",
       "stage": "Interview",
       "applied_date": "2026-08-11",
-      "source_url": "https://jobs.example.org/sandpiper/ai-native-swe",
-      "contact": "Ben Faletau, Engineering Lead",
-      "next_action": "Technical interview, drill technical on their stack",
+      "source_url": "https://jobs.example.org/sandpiper/business-analyst",
+      "contact": "Ben Faletau, Operations Lead",
+      "next_action": "Technical interview, drill technical on their reporting stack",
       "next_action_date": "2026-09-12"
     },
     {
       "id": "quokka-cloud",
       "company": "Quokka Cloud",
-      "role": "Associate Developer (AI tooling)",
+      "role": "Associate Business Analyst (AI tooling)",
       "stage": "Final",
       "applied_date": "2026-08-04",
-      "source_url": "https://example.com/quokka-cloud/associate-developer",
-      "contact": "Sana Wickramasinghe, Head of Engineering",
+      "source_url": "https://example.com/quokka-cloud/associate-business-analyst",
+      "contact": "Sana Wickramasinghe, Head of Operations",
       "next_action": "Final round with two founders, prep leadership stories",
       "next_action_date": "2026-09-15"
     },
     {
       "id": "tessellate",
       "company": "Tessellate",
-      "role": "AI-Native Front-end Developer",
+      "role": "Administration Assistant",
       "stage": "Offer",
       "applied_date": "2026-07-29",
-      "source_url": "https://jobs.example.org/tessellate/frontend-developer",
+      "source_url": "https://jobs.example.org/tessellate/admin-assistant",
       "contact": "Jordan Pak, Co-founder",
       "next_action": "Review offer terms, compare against salary floor",
       "next_action_date": "2026-09-09"

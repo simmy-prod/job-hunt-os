@@ -7,13 +7,13 @@ Be honest about the 2s and 3s. Those are what `interview-drill` and
 
 | Skill | Evidence (accomplishment slug) | Confidence 1-5 |
 |---|---|---|
-| ai-integration | ragpiq-<slug> | 4 |
-| debugging | <slug> | 3 |
+| ai-tool-fluency | ragpiq-<slug> | 4 |
+| stakeholder-communication | <slug> | 3 |
 | ownership | <slug> | 3 |
-| communication | <slug> | 2 |
+| process-documentation | <slug> | 2 |
 | speed-of-learning | <slug> | 4 |
-| front-end | <slug> | 2 |
-| systems-design | <slug> | 2 |
+| data-analysis | <slug> | 2 |
+| problem-solving | <slug> | 2 |
 
 Add rows as new accomplishments land. Drop the confidence score the moment a
 drill shows the real number is lower.

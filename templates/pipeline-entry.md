@@ -1,6 +1,6 @@
 ---
 company: Example Company
-role: AI-Native Software Engineer
+role: Business Analyst
 stage: Researching
 applied_date: ""
 source_url: https://jobs.example.org/example-company/role
