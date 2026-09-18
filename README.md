@@ -20,17 +20,31 @@ so nothing gets dropped and every interview walks in prepared.
 ```
 ┌─────────────┐     ┌──────────────────┐     ┌───────────────┐
 │   Notion     │────▶│  job-hunt-os      │────▶│   Dashboard    │
-│  (target DB, │     │  (this repo)      │     │  (Vercel)      │
-│  source of   │◀────│  Claude Code +    │     │  Kanban view   │
-│  truth)      │     │  5 custom skills  │     └───────────────┘
+│  (target DB, │     │  (this repo)      │     │  Kanban view   │
+│  source of   │◀────│  runtime + Claude │     └───────────────┘
+│  truth)      │     │  Code skills      │
 └─────────────┘     └──────────────────┘
                             │
                      ┌──────┴──────┐
                      │  profile/    │  private - accomplishments,
                      │  pipeline/   │  applications, prep docs
-                     │  prep/       │  (gitignored, local only)
+                     │  targets/    │  (gitignored, local only)
                      └─────────────┘
 ```
+
+Two layers do the daily work, and they're deliberately separate:
+
+- **Deterministic runtime** (`src/`, run via `npm run morning:plan` and
+  `npm run doctor`): a plain Node.js program, no model or LLM API calls.
+  It reads the Notion target database through Notion's read-only API and
+  computes which targets are due, which follow-ups are due today, and which
+  rows need human review. See [`docs/runtime.md`](docs/runtime.md) for the
+  full contract.
+- **Claude Code skills** (`.claude/skills`, `.claude/commands`): the
+  user-invoked, judgment-requiring work the deterministic runtime doesn't
+  do - scanning job boards, researching companies and interviewers, drilling
+  interview answers, and writing STAR-format accomplishments. These still
+  need Claude Code and a human in the loop.
 
 **Three layers, one repo:**
 
@@ -73,14 +87,16 @@ Claude in Chrome (job board + LinkedIn research), static HTML/JS dashboard on Ve
 This was built for one job search, but the machine layer is generic. To point it
 at your own:
 
-**Prerequisites:** [Claude Code](https://claude.com/claude-code), Node.js 18+.
-Optional: a Notion database for target companies, a Vercel account to host your
-own dashboard.
+**Prerequisites:** [Claude Code](https://claude.com/claude-code) for the
+skills, Node.js 24.15.0+ for the deterministic runtime (`node:sqlite` needs
+it; see [`docs/runtime.md`](docs/runtime.md)). Optional: a Notion database
+for target companies, a Vercel account to host your own dashboard.
 
 **Setup:**
 
-1. Clone the repo, then `npm install` (there are no dependencies; this just
-   enables the `npm` scripts).
+1. Clone the repo, then `npm install` (installs the runtime's two
+   dependencies, `@notionhq/client` and `zod`, plus dev tooling for
+   typecheck/lint/test).
 2. Create the private layer from the starter files: follow
    [`templates/README.md`](templates/README.md). The `profile/`, `pipeline/`,
    `prep/`, and `targets/` directories are gitignored, so you build them locally.
@@ -92,9 +108,17 @@ own dashboard.
 5. If you use Notion, set up the target database and record its id in
    `targets/notion-db.md` (fields listed in that template). If you do not,
    `job-scan` and `/log-app` still work against `pipeline/*.md` alone.
+6. To run the deterministic morning planner against that Notion database,
+   copy `templates/runtime-config.json` to `targets/runtime.json`, fill in
+   your data source id and field mapping, create a standalone Notion
+   integration token, and export it as `NOTION_TOKEN`. Full details,
+   including why the token must be separate from any Notion connector
+   Claude Code itself uses, are in [`docs/runtime.md`](docs/runtime.md).
 
-**Daily use:** run `/morning-hunt` in Claude Code. Scan for new matches, surface
-follow-ups due today, one interview-drill rep.
+**Daily use:** run `/morning-hunt` in Claude Code for the scan, follow-up
+surfacing, and one interview-drill rep. `npm run morning:plan` and
+`npm run doctor` run the deterministic, model-free due-date check on their
+own, without Claude Code, if you just want that part.
 
 **View your pipeline:**
 
@@ -107,11 +131,13 @@ at http://localhost:8000 (badge: "live pipeline data"). It must be served, not
 opened as a `file://` path, or the browser blocks the data fetch and the page
 falls back to sample data.
 
-**Deploy your own dashboard (optional):** point Vercel at the repo with
-`outputDirectory` set to `dashboard/` (see [`vercel.json`](vercel.json)). Only
-`dashboard/data.json` is committed and deployed; your real `data.local.json` is
-gitignored and never leaves your machine. Replace `data.json` with your own
-fictional showcase set, or leave the sample in place.
+**Deploy your own dashboard (optional):** point Vercel at the repo; it already
+runs `npm run build:public` as its build command with `.public` as the output
+directory (see [`vercel.json`](vercel.json)). That build copies only
+`dashboard/index.html` and `dashboard/data.json` into `.public/`. Your real
+`dashboard/data.local.json` is gitignored and never leaves your machine.
+Replace `data.json` with your own fictional showcase set, or leave the sample
+in place.
 
 ## Status
 
