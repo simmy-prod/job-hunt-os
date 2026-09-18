@@ -66,10 +66,11 @@ limitations" sections.
    this as an unresolved unknown instead. Simmy subsequently created a
    dedicated internal integration token, shared it with the Target Companies
    data source, and built `targets/runtime.json`. I verified the field mapping
-   and data source ID (`97948a83-301d-4673-b6b4-52f7f60d0357`) against the
-   live schema via a separate read-only Notion connection before he reran
-   `doctor`, then he ran both `doctor` and `morning:plan` against the live
-   database with the results reported back in chat. Both succeeded.
+   and data source ID (private; lives only in local `targets/runtime.json`,
+   not reproduced here) against the live schema via a separate read-only
+   Notion connection before he reran `doctor`, then he ran both `doctor` and
+   `morning:plan` against the live database with the results reported back in
+   chat. Both succeeded.
 
 ## Tests run and outcomes
 
@@ -92,31 +93,43 @@ All commands run from `/Users/ethansimmons/job-hunt-os` on the new branch.
 
 Node version used for all of the above: v26.7.0 (the only version installed;
 no nvm available in this environment). `.nvmrc` pins 24, and the CI matrix
-(`.github/workflows/verify.yml`) covers both 24 and 26; Node 24 has not been
-exercised locally and depends on that CI run once the branch is pushed.
+(`.github/workflows/verify.yml`) covers both 24 and 26. **Update:** GitHub CI
+subsequently ran on PR #5 and passed on both Node 24 and Node 26, so
+`node:sqlite` compatibility across the pinned engine range is confirmed, not
+just locally exercised on 26.
 
 ## Known limitations or unresolved issues
 
-1. `docs/runtime.md` does not exist, though two error messages (in
-   `src/notion.ts` and `src/domain.ts`) point users to it for the Notion
-   field-mapping and validation contract. Left as-is per explicit user
-   instruction. Recommend either writing that doc or removing the references
-   in a follow-up.
-2. ~~Live Notion path is entirely unverified.~~ **Resolved.** Simmy created
-   `NOTION_TOKEN` and `targets/runtime.json`, and both `doctor` and
-   `morning:plan` now run successfully against the live Target Companies data
-   source. The one open question from the original review still stands: the
-   database has no `Check Frequency` property, so `targets/runtime.json` uses
+1. ~~`docs/runtime.md` does not exist.~~ **Resolved in the mandatory-gate
+   cleanup pass.** `docs/runtime.md` now exists and documents the runtime
+   architecture, Node requirement, private configuration, standalone Notion
+   credential requirement, explicit field mapping, fixed-weekly cadence,
+   commands, exit behavior, SQLite ledger location, read-only guarantees,
+   privacy boundary, and troubleshooting. `README.md` was also corrected: it
+   no longer claims Node 18+, no dependencies, or the old `dashboard/` Vercel
+   output directory, and now distinguishes the deterministic runtime from the
+   user-invoked Claude Code skills.
+2. Live Notion path: confirmed working. Simmy created `NOTION_TOKEN` and
+   `targets/runtime.json`, and both `doctor` and `morning:plan` run
+   successfully against the live Target Companies data source. The database
+   has no `Check Frequency` property, so `targets/runtime.json` uses
    `frequency.mode: "fixed"` with `value: "weekly"` for every target rather
    than a per-row cadence. If per-company daily/weekly cadence is wanted,
    that needs either a `Check Frequency` select column added to the database
-   or an explicit decision to keep the fixed default.
-3. Node 24 untested locally. Only Node 26.7.0 was available. `node:sqlite`
-   changed between 24 and 26; the CI matrix is the only current coverage for
-   the pinned engine version until someone runs it on Node 24 directly.
+   or an explicit decision to keep the fixed default. This is now documented
+   in `docs/runtime.md`.
+3. ~~Node 24 untested.~~ **Resolved.** GitHub CI ran the full `npm run check`
+   and `npm run build:public` suite on both Node 24 and Node 26 for PR #5 and
+   passed on both. Node 24 is no longer an unresolved compatibility concern.
 4. `.deep-research/` left untracked. If that research trail should be
    preserved in the repo, it needs an explicit decision and a separate commit;
    it was not folded into this slice.
+5. The CLI accepts `--dry-run` but the flag currently has no effect (it is
+   parsed and then ignored in `src/cli.ts`). Not fixed in this cleanup pass;
+   it is explicitly scoped to Slice 2.0 ("no accepted option may be silently
+   ignored"). Documented as a known gap in `docs/runtime.md`'s
+   troubleshooting table so it isn't mistaken for a working safety flag in
+   the meantime.
 
 ## Deviation from the supplied plan
 
@@ -129,15 +142,21 @@ the handoff and the approved plan exactly.
 ## Recommended next step
 
 1. ~~Push `feature/deterministic-morning-planner` and open a PR into `master`
-   for review.~~ Done: [PR #5](https://github.com/simmy-prod/job-hunt-os/pull/5).
+   for review.~~ Done: [PR #5](https://github.com/simmy-prod/job-hunt-os/pull/5),
+   **merged into `master`.**
 2. ~~Have Simmy set `NOTION_TOKEN` and create a private `targets/runtime.json`
    so `doctor` and `plan` can be run against live Notion at least once.~~ Done
    and verified live.
 3. Decide whether target cadence should stay fixed-weekly for everyone or
    move to a per-row `Check Frequency` column in the Target Companies
    database, then update `targets/runtime.json`'s `frequency` block to match.
-4. Decide on `docs/runtime.md`: write it, or strip the two dangling
-   references.
-5. Confirm Node 24 compatibility via the CI run on the pushed branch before
-   relying on `node:sqlite` behavior beyond what Node 26 exercised locally.
-6. Merge PR #5 once reviewed (Simmy's call, not automatic).
+4. ~~Decide on `docs/runtime.md`: write it, or strip the two dangling
+   references.~~ Done: `docs/runtime.md` now exists.
+5. ~~Confirm Node 24 compatibility via the CI run on the pushed branch.~~ Done:
+   CI passed on both Node 24 and Node 26.
+6. ~~Merge PR #5 once reviewed.~~ Done: PR #5 is merged into `master`.
+7. This mandatory-gate cleanup itself (correcting the merged-state record,
+   resolving the Node 24 status, adding `docs/runtime.md`, and removing the
+   private Notion data source ID from both handoff documents) is its own
+   branch and PR, opened after PR #5 and PR #6. Review and merge that before
+   starting Slice 2.0.
