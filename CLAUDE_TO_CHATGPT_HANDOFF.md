@@ -7,8 +7,18 @@ blocker named in the handoff, `no-control-regex` in `src/planner.ts`, is fixed.
 The full verification suite (`npm run check`, which chains typecheck, lint,
 test, privacy check) is green, `npm run build:public` produces the correct
 allowlisted output, and both CLI commands work by hand with deterministic
-output. All work happened on a new branch, `feature/deterministic-morning-planner`,
-per the user's global git workflow rules; nothing was committed to `master`.
+output against both the demo fixture and the live Notion Target Companies
+database. All work happened on a new branch,
+`feature/deterministic-morning-planner`, per the user's global git workflow
+rules; nothing was committed to `master`.
+
+**Update after initial handoff:** Simmy created a standalone `NOTION_TOKEN`,
+shared the Target Companies data source with it directly, and built
+`targets/runtime.json` (private, gitignored) from the template. `doctor` and
+`morning:plan` were then run against the live database and both succeeded.
+The live Notion path, previously listed below as an unresolved unknown, is
+now confirmed working end to end. See the updated "Tests run" and "Known
+limitations" sections.
 
 ## Files changed
 
@@ -49,10 +59,17 @@ per the user's global git workflow rules; nothing was committed to `master`.
    output (repo audit, architecture research, a Codex-vs-Claude model
    comparison) rather than application code, tests, or docs the acceptance
    criteria call for. Left untracked rather than guessing it should ship.
-5. **No live Notion verification attempted.** No `NOTION_TOKEN` is set in this
-   environment and no `targets/runtime.json` exists. Per the handoff's explicit
-   instruction, did not substitute the Notion MCP connector's credential for
-   the standalone runtime token. This is reported here, not silently skipped.
+5. **Live Notion verification: initially blocked, later completed by the user.**
+   At handoff time no `NOTION_TOKEN` was set and no `targets/runtime.json`
+   existed. Per the handoff's explicit instruction, did not substitute the
+   Notion MCP connector's credential for the standalone runtime token; flagged
+   this as an unresolved unknown instead. Simmy subsequently created a
+   dedicated internal integration token, shared it with the Target Companies
+   data source, and built `targets/runtime.json`. I verified the field mapping
+   and data source ID (`97948a83-301d-4673-b6b4-52f7f60d0357`) against the
+   live schema via a separate read-only Notion connection before he reran
+   `doctor`, then he ran both `doctor` and `morning:plan` against the live
+   database with the results reported back in chat. Both succeeded.
 
 ## Tests run and outcomes
 
@@ -70,6 +87,8 @@ All commands run from `/Users/ethansimmons/job-hunt-os` on the new branch.
 | Same command run twice with `--json --no-record` and identical `--at` | Byte-identical output both times, confirming determinism |
 | `npm run doctor -- --demo` (text and `--json`) | Pass: reports status ok, correct counts, warning null |
 | `git diff --check` | Clean, no whitespace errors |
+| `npm run doctor` against live Notion (Target Companies data source) | **Pass**, run by Simmy after creating `NOTION_TOKEN` and `targets/runtime.json`: "valid notion schema and records (Australia/Melbourne). 0 items need review." Confirms schema validation, auth, and the pinned read-only transport all work against the real database, not just the mocked reader. |
+| `npm run morning:plan` against live Notion | **Pass**, run by Simmy: produced a deterministic Melbourne-date digest with real due targets, follow-ups, and 0 review items. Company names and counts are private data and are intentionally omitted from this document. |
 
 Node version used for all of the above: v26.7.0 (the only version installed;
 no nvm available in this environment). `.nvmrc` pins 24, and the CI matrix
@@ -83,12 +102,15 @@ exercised locally and depends on that CI run once the branch is pushed.
    field-mapping and validation contract. Left as-is per explicit user
    instruction. Recommend either writing that doc or removing the references
    in a follow-up.
-2. Live Notion path is entirely unverified. No `NOTION_TOKEN` and no
-   `targets/runtime.json` exist in this environment. The demo/fixture path is
-   fully tested; the actual Notion read (schema retrieve plus paginated query
-   against the configured data source) has not been exercised against the
-   live API in this session, only against the mocked reader in
-   `tests/notion.test.ts`.
+2. ~~Live Notion path is entirely unverified.~~ **Resolved.** Simmy created
+   `NOTION_TOKEN` and `targets/runtime.json`, and both `doctor` and
+   `morning:plan` now run successfully against the live Target Companies data
+   source. The one open question from the original review still stands: the
+   database has no `Check Frequency` property, so `targets/runtime.json` uses
+   `frequency.mode: "fixed"` with `value: "weekly"` for every target rather
+   than a per-row cadence. If per-company daily/weekly cadence is wanted,
+   that needs either a `Check Frequency` select column added to the database
+   or an explicit decision to keep the fixed default.
 3. Node 24 untested locally. Only Node 26.7.0 was available. `node:sqlite`
    changed between 24 and 26; the CI matrix is the only current coverage for
    the pinned engine version until someone runs it on Node 24 directly.
@@ -106,13 +128,16 @@ the handoff and the approved plan exactly.
 
 ## Recommended next step
 
-1. Push `feature/deterministic-morning-planner` and open a PR into `master`
-   for review (in progress as part of this handoff).
-2. Have Simmy set `NOTION_TOKEN` and create a private `targets/runtime.json`
-   (from `templates/runtime-config.json`, filled in with the real data source
-   ID and field mapping) so `doctor` and `plan` can be run against live
-   Notion at least once before this is trusted as operational.
-3. Decide on `docs/runtime.md`: write it, or strip the two dangling
+1. ~~Push `feature/deterministic-morning-planner` and open a PR into `master`
+   for review.~~ Done: [PR #5](https://github.com/simmy-prod/job-hunt-os/pull/5).
+2. ~~Have Simmy set `NOTION_TOKEN` and create a private `targets/runtime.json`
+   so `doctor` and `plan` can be run against live Notion at least once.~~ Done
+   and verified live.
+3. Decide whether target cadence should stay fixed-weekly for everyone or
+   move to a per-row `Check Frequency` column in the Target Companies
+   database, then update `targets/runtime.json`'s `frequency` block to match.
+4. Decide on `docs/runtime.md`: write it, or strip the two dangling
    references.
-4. Confirm Node 24 compatibility via the CI run on the pushed branch before
+5. Confirm Node 24 compatibility via the CI run on the pushed branch before
    relying on `node:sqlite` behavior beyond what Node 26 exercised locally.
+6. Merge PR #5 once reviewed (Simmy's call, not automatic).
