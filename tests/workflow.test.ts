@@ -64,6 +64,11 @@ test("no-record makes no local output and never mutates the input", async () => 
   await runMorning({config, source: () => ({read: async () => data}), root, clock, record: false});
   assert.equal(existsSync(join(root, ".runtime")), false); assert.deepEqual(data, before);
 });
+test("dry-run never writes to the ledger, even if record is also true", async () => {
+  const root = temporary();
+  await runMorning({config, source: () => ({read: async () => snapshot()}), root, clock, record: true, dryRun: true});
+  assert.equal(existsSync(join(root, ".runtime")), false);
+});
 test("private output refuses a symlink into another directory", async () => {
   const root = temporary(); const outside = temporary();
   symlinkSync(outside, join(root, ".runtime"));

@@ -15,7 +15,10 @@ const usage = `Usage: npm run morning:plan -- [--demo | --config targets/runtime
        npm run doctor -- [--demo | --config targets/runtime.json] [--json]
 
 Planning is always read-only for business data. Local audit/digest records are
-stored privately in .runtime/runs.sqlite unless --no-record is supplied.
+stored privately in .runtime/runs.sqlite unless --dry-run or --no-record is
+supplied; both suppress the ledger write, and output is marked "dryRun" when
+--dry-run was requested. --dry-run and --no-record are only accepted with
+plan: doctor never writes to the ledger, so they would have no effect there.
 --demo explicitly uses fictional fixtures. It never contacts Notion.
 --at <ISO timestamp with offset> injects a clock for reproducible offline checks.
 Doctor validates the source and date contracts without creating local run records.
@@ -28,6 +31,9 @@ async function main(): Promise<void> {
   if (values.help) { console.log(usage); return; }
   if (positionals.length !== 1 || !["plan", "doctor"].includes(positionals[0] ?? "")) throw new AppError("CONFIG", usage);
   if (values.demo && values.config) throw new AppError("CONFIG", "Choose --demo or --config, not both.");
+  if (positionals[0] === "doctor" && (values["dry-run"] || values["no-record"])) {
+    throw new AppError("CONFIG", "--dry-run and --no-record only apply to plan; doctor never writes to the ledger.");
+  }
   const config: Config = values.demo ? validate(configSchema, {
     schemaVersion: 1, timezone: "Australia/Melbourne",
     source: {driver: "snapshot", path: resolve(root, "tests/fixtures/snapshot.json")},
@@ -47,8 +53,10 @@ async function main(): Promise<void> {
     console.log(values.json ? JSON.stringify(result, null, 2) : `Doctor: valid ${result.source} schema and records (${result.timezone}). ${result.counts.reviews} items need review.${result.warning ? ` ${result.warning}` : ""}`);
     return;
   }
-  const plan = await runMorning({config, source, root, clock: {now: () => now}, record: !values["no-record"]});
-  console.log(values.json ? JSON.stringify(plan, null, 2) : `${values.demo ? "Fictional demo data\n" : ""}${digest(plan)}`);
+  const dryRun = Boolean(values["dry-run"]);
+  const plan = await runMorning({config, source, root, clock: {now: () => now}, record: !values["no-record"], dryRun});
+  console.log(values.json ? JSON.stringify({...plan, dryRun}, null, 2)
+    : `${values.demo ? "Fictional demo data\n" : ""}${dryRun ? "Dry run: nothing written to the ledger\n" : ""}${digest(plan)}`);
 }
 
 function parseCliArgs() {
