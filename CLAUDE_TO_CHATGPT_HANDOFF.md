@@ -281,8 +281,9 @@ extension rather than a silent scope change).
 
 ### Recommended next step
 
-Review and merge the PR for this branch, then decide whether to proceed to
-Slice 2.1 (operational readiness: `status` command, `doctor` expansion,
-single-instance lock, stale-lock recovery, retention policy) per
-`CHATGPT_TO_CLAUDE_HANDOFF.md`. Per the handoff's operating rule, do not
-begin Slice 2.1 until this slice is explicitly approved.
+Review and merge [PR #9](https://github.com/simmy-prod/job-hunt-os/pull/9),
+`feature/slice-2.0-foundation-consolidation` into `master`, then decide
+whether to proceed to Slice 2.1 (operational readiness: `status` command,
+`doctor` expansion, single-instance lock, stale-lock recovery, retention
+policy) per `CHATGPT_TO_CLAUDE_HANDOFF.md`. Per the handoff's operating
+rule, do not begin Slice 2.1 until this slice is explicitly approved.
