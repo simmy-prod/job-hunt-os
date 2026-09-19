@@ -973,3 +973,42 @@ recovery) requires an Opus planning/design review per
 `CHATGPT_TO_CLAUDE_HANDOFF.md`'s operating rule (credential loading via
 Keychain, LaunchAgent generation) before any Sonnet implementation begins;
 do not start Slice 2.2 implementation directly from this handoff.
+
+### Post-review fixes (before approval)
+
+Two follow-up commits landed on `feature/slice-2.1-operational-readiness`
+during Simmy's review of [PR #12](https://github.com/simmy-prod/job-hunt-os/pull/12),
+before approval. Both are already part of the merged `master` history
+(squashed into this PR's merge commit); this note documents them for the
+record, since it was written after that merge had already happened and so
+could not itself be folded into the same squash.
+
+1. **Lock leak on ledger-open failure.** Simmy's review caught that
+   `runMorning` (`src/workflow.ts`, as it stood in this slice) called
+   `acquireLock` and `new RunLedger` *before* the `try` block that was
+   supposed to guarantee their cleanup. If `RunLedger`'s constructor threw
+   after the lock was already held (a symlinked or otherwise unopenable
+   `runs.sqlite`, for example), execution never reached the
+   `try`/`finally`, so `.runtime/morning.lock` was left behind: exactly the
+   kind of operational failure this slice exists to prevent. Fixed by
+   moving both acquisitions inside the `try` block as `let` bindings
+   assigned there, so any failure between them (or after) still reaches the
+   existing `finally` and releases whatever was actually acquired. Added a
+   regression test in `tests/workflow.test.ts`: pre-creates `.runtime` as a
+   plain directory (so lock acquisition succeeds) but symlinks
+   `.runtime/runs.sqlite` to an external file (so `RunLedger`'s constructor
+   fails its own symlink guard), asserts `runMorning` rejects with the
+   ledger's `STORAGE` message, then asserts the lock file is gone and a
+   fresh `acquireLock` succeeds immediately, no stale-lock recovery needed.
+   Test count at the time: 96 to 97 (before Slice 2.2 and later slices added
+   more).
+2. **Em-dashes in authored docs.** `CLAUDE.md`'s repo-wide style rule
+   prohibits em/en dashes anywhere in the repo; this Slice 2.1 handoff
+   section and `docs/runtime.md` had picked up several. Replaced each with a
+   comma, semicolon, colon, or parentheses depending on the sentence (no
+   plain hyphens misused as a substitute). Re-scanned the full branch diff
+   against `origin/master` for `U+2013`/`U+2014` afterward; none remained.
+
+Both fixes were re-verified with the full suite (`npm run check`,
+`npm run build:public`, `git diff --check`) before pushing, per the same
+verification bar as the rest of this slice.
