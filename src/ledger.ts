@@ -14,6 +14,19 @@ export type RunRecord =
   | {status: "success"; logicalKey: string; observedAt: string; plan: Plan}
   | {status: "failed"; logicalKey: string; observedAt: string; errorCode: ErrorCode};
 
+export interface LatestRun {
+  logicalKey: string;
+  status: "success" | "failed";
+  observedAt: string;
+  revision: number;
+  errorCode: ErrorCode | null;
+}
+
+// Business-data-bearing `runs` rows are pruned sooner than the already-redacted
+// `events` rows. See docs/runtime.md's retention section for the rationale.
+export const RUN_RETENTION_DAYS = 90;
+export const EVENT_RETENTION_DAYS = 180;
+
 export class RunLedger {
   private readonly db: DatabaseSync;
   constructor(root: string) {
@@ -87,6 +100,14 @@ export class RunLedger {
       this.db.prepare("INSERT INTO events (logical_key, observed_at, outcome, error_code) VALUES (?, ?, ?, ?)").run(
         record.logicalKey, record.observedAt, record.status, record.status === "failed" ? record.errorCode : null,
       );
+      // Retention runs in the same transaction as every write, so the ledger
+      // never grows unboundedly and pruning is atomic with the record it rides in on.
+      const referenceTime = Date.parse(record.observedAt);
+      if (Number.isFinite(referenceTime)) {
+        const cutoff = (days: number) => new Date(referenceTime - days * 86_400_000).toISOString();
+        this.db.prepare("DELETE FROM runs WHERE observed_at < ?").run(cutoff(RUN_RETENTION_DAYS));
+        this.db.prepare("DELETE FROM events WHERE observed_at < ?").run(cutoff(EVENT_RETENTION_DAYS));
+      }
       this.db.exec("COMMIT");
     } catch {
       if (this.db.isTransaction) this.db.exec("ROLLBACK");
@@ -95,4 +116,36 @@ export class RunLedger {
   }
 
   close(): void { this.db.close(); }
+
+  // Read-only: never creates .runtime or the ledger file. Used by `status`,
+  // which must not have a side effect just from being run.
+  static readLatest(root: string, logicalKeyPrefix: string): LatestRun | null {
+    const directory = join(realpathSync(root), ".runtime");
+    const database = join(directory, "runs.sqlite");
+    if (!existsSync(database)) return null;
+    try {
+      if (lstatSync(directory).isSymbolicLink()) throw new Error();
+      if (lstatSync(database).isSymbolicLink() || !lstatSync(database).isFile() || lstatSync(database).nlink !== 1) throw new Error();
+      const db = new DatabaseSync(database, {readOnly: true, timeout: 5_000});
+      try {
+        // logicalKeyPrefix is derived internally from a hex config hash; it
+        // contains no LIKE wildcard characters.
+        const row = db.prepare(
+          "SELECT logical_key, status, observed_at, revision, error_code FROM runs WHERE logical_key LIKE ? ORDER BY observed_at DESC LIMIT 1",
+        ).get(`${logicalKeyPrefix}%`);
+        if (!row) return null;
+        return {
+          logicalKey: String(row.logical_key),
+          status: row.status === "failed" ? "failed" : "success",
+          observedAt: String(row.observed_at),
+          revision: Number(row.revision),
+          errorCode: (row.error_code as ErrorCode | null | undefined) ?? null,
+        };
+      } finally {
+        db.close();
+      }
+    } catch {
+      throw new AppError("STORAGE", "Cannot read the private run ledger. Check file permissions and ledger schema version.");
+    }
+  }
 }

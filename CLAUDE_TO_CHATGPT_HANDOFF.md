@@ -286,3 +286,178 @@ Slice 2.1 (operational readiness: `status` command, `doctor` expansion,
 single-instance lock, stale-lock recovery, retention policy) per
 `CHATGPT_TO_CLAUDE_HANDOFF.md`. Per the handoff's operating rule, do not
 begin Slice 2.1 until this slice is explicitly approved.
+
+---
+
+## Slice 2.1: operational readiness
+
+Branch `feature/slice-2.1-operational-readiness`. Started from `origin/master`
+at `baf6e34` (the gate-cleanup commit); Slice 2.0 (PR #9) landed on
+`origin/master` partway through this session, so the branch was rebased onto
+it (`c793de1`) before continuing — conflicts were limited to `src/errors.ts`
+(both slices touched `ErrorCode`) and `src/workflow.ts` (both touched
+`runMorning`'s options), resolved by keeping Slice 2.0's `errorCodeSchema`/
+`dryRun` behavior and layering this slice's lock/retention additions on top.
+Scope per the task brief and `CHATGPT_TO_CLAUDE_HANDOFF.md`'s Slice 2.1
+deliverables: make the planner observable and safe to run unattended, with
+no scheduler, Notion write, job-board discovery, or new runtime dependency.
+
+### Summary
+
+- **`status` command** (`src/cli.ts`, reading `RunLedger.readLatest` in
+  `src/ledger.ts`): reports `never_run` / `success` / `failed` / `stale` for
+  the current configuration by reading only the local ledger — no source
+  read, no Notion call, no lock. Never creates `.runtime` as a side effect of
+  running. Output never includes business data (`plan_json`/`digest`), only
+  `{state, date, timezone, latestRunDate, revision, errorCode}`.
+- **`doctor` expansion** (`src/doctor.ts`, new): restructured into five
+  independent checks (`node`, `runtimeDir`, `gitignore`, `config`, `source`)
+  that each catch their own errors, so a broken config no longer hides
+  whether Node/permissions/gitignore are fine. The report shape changed from
+  `{status: "ok", ...}` to `{ok, worstCode, checks: {...}, counts, warning}`;
+  the one existing test asserting the old shape was updated, nothing else
+  referenced it.
+- **Single-instance lock** (`src/lock.ts`, new): `acquireLock` wraps the
+  complete `runMorning` body (remote read included), using an `O_EXCL`-
+  created `.runtime/morning.lock` file. Engaged exactly when the ledger
+  itself would be touched (`record && !dryRun`), so `--no-record`/`--dry-run`
+  keep their existing zero-footprint guarantee. Stale-lock recovery: a dead
+  `pid` (`ESRCH` from `process.kill(pid, 0)`) or an age over 6 hours (guards
+  `pid` reuse) is deleted and acquisition retried once; otherwise a `LOCKED`
+  error (new exit code `5`) is thrown rather than blocking silently. Release
+  re-checks the lock's `token` before unlinking, so it can never delete a
+  lock a different process has since legitimately acquired.
+- **Ledger retention** (`src/ledger.ts`): `record()` now prunes `runs` rows
+  older than 90 days and `events` rows older than 180 days, by `observedAt`,
+  in the same transaction as the write — atomic, no new command or schedule.
+- New `ErrorCode` value `"LOCKED"`; `exitCodeFor` (`src/errors.ts`) is now the
+  single shared exit-code mapping used by both the top-level CLI error
+  handler and `doctor`'s own (non-throwing) exit-code selection.
+
+### Files changed
+
+- `src/lock.ts` (new): `acquireLock`/stale-lock recovery/token-checked release.
+- `src/doctor.ts` (new): `checkNodeVersion`, `checkRuntimeDir`, `checkGitignore`,
+  and `runDoctorReport`, which aggregates them plus the existing source-read/
+  schema-validate/plan flow.
+- `src/ledger.ts`: added `RunLedger.readLatest` (read-only static, never
+  creates `.runtime`/the db file) and retention pruning inside `record()`.
+- `src/workflow.ts`: `runMorning` now acquires/releases the lock around its
+  body; added `logicalKeyPrefix(config)` (shared by `runMorning` and `status`
+  so the two never compute the prefix differently).
+- `src/errors.ts`: added `"LOCKED"` to `errorCodeSchema`; added `exitCodeFor`.
+- `src/cli.ts`: added the `status` command; `doctor` now builds its report via
+  `runDoctorReport` and prints-then-sets-exit-code instead of throwing (the
+  one deliberate deviation from the plan/status throw-once contract, so a
+  diagnostic command shows everything that did and didn't pass, not just the
+  first failure); `--dry-run`/`--no-record` rejection extended from
+  `doctor`-only to `doctor`-or-`status`; usage string updated.
+- `docs/runtime.md`: documented `status`, the expanded `doctor` checks, a new
+  "Concurrency and the run lock" section, the retention policy, the `LOCKED`
+  exit code, and new troubleshooting rows.
+- `tests/lock.test.ts` (new): acquire/release, concurrent-acquisition
+  `LOCKED`, stale recovery via a real dead `pid` (spawn-then-exit, not a
+  magic number), age-based staleness, token-checked release, symlink refusal.
+- `tests/doctor.test.ts` (new): each check function in isolation, plus
+  `runDoctorReport` aggregation (config failure still runs the other checks;
+  a source/schema failure surfaces `worstCode` without hiding `config: ok`).
+- `tests/ledger.test.ts`: added retention pruning (a hand-inserted 2020 row
+  is gone after the next `record()`) and `readLatest` cases (never-run
+  without creating `.runtime`, prefix filtering across two different config
+  hashes, symlinked-ledger refusal).
+- `tests/cli.test.ts`: updated the doctor-shape assertion for the new report;
+  extended the dry-run/no-record rejection loop to cover `status`; added
+  `status` end-to-end cases (never-run → success → stale → failed, driven
+  through real `plan`/`status` invocations against a temp config) and a
+  text-mode `status` case.
+
+### Important implementation decisions
+
+1. **The lock does not cover `doctor`.** `doctor` was already documented as
+   never touching the ledger "by design"; extending the lock to it would
+   contradict that existing contract for no operational benefit, since
+   nothing a scheduler runs unattended calls `doctor`. Recorded explicitly in
+   `docs/runtime.md` rather than left implicit.
+2. **`status` parses the business date out of the existing `logicalKey`
+   string rather than adding a ledger schema column.** `morning-plan:v1:
+   <hash>:<date>` already ends in an unambiguous date segment (the hash is
+   hex, the date is `YYYY-MM-DD`, neither contains `:`), so `readLatest` and
+   `status` split on `:` and take the last segment instead of bumping
+   `PRAGMA user_version` and writing a migration for one derived field.
+3. **`doctor`'s report shape changed rather than being wrapped to preserve
+   the old `{status: "ok"}` field.** Doctor's JSON output has no consumer
+   outside this repo's own tests (checked: no script, doc example, or other
+   file parses it), so this was a clean rename rather than a compatibility
+   shim for an API with no external caller.
+4. **Stale-lock recovery uses both `pid` liveness and a 6-hour age cutoff,
+   not just one.** `pid` liveness alone is vulnerable to `pid` reuse after a
+   crash; age alone would falsely reclaim a lock from an unusually slow but
+   genuinely running process. Combining them (stale if either condition
+   holds) was chosen over configurability, since a single Notion-database
+   read/plan/write should never legitimately approach 6 hours.
+5. **Retention is unconditional inside `record()`, not a separate `--prune`
+   flag or command.** The deliverables ask to "define retention," and an
+   opt-in prune command would need someone to remember to run it — the whole
+   point of this slice is removing things an unattended run must not depend
+   on a human remembering to do.
+
+### Tests run and outcomes
+
+All commands run from the worktree root on
+`feature/slice-2.1-operational-readiness`, after rebasing onto Slice 2.0.
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | Pass |
+| `npm run lint` | Pass |
+| `npm test` | 96/96 pass (70 existing + 26 new: 6 lock tests, 12 doctor tests, 4 ledger tests — retention plus 3 `readLatest` cases, 4 CLI `status`/rejection cases) |
+| `npm run privacy:check` | Pass — confirmed `src/lock.ts`/`src/doctor.ts` use only already-allowlisted imports (`node:fs`, `node:path`, `node:crypto`, `zod`), no `node:child_process` |
+| `npm run check` (chained) | Pass end to end |
+| `npm run build:public` | Pass, same allowlisted `.public/index.html` + `.public/data.json` output |
+| `git diff --check` | Clean |
+| Manual: `doctor --demo --json` in a scratch directory | `{"ok": true, ...}` with all five checks passing against the real repo (`.runtime`/`.gitignore` checks always run against the repository root, matching the ledger's existing root-relative behavior, not the invoking `cwd`) |
+| Manual: `status --demo --json` before any run, after a `--no-record` run, and after a recorded run | `never_run` → `never_run` (unchanged, confirming `--no-record` still leaves no trace) → `success` with `revision: 1` |
+| Privacy/runtime-boundary check | Ran `npm run privacy:check` explicitly (see above) and re-read `scripts/check-boundaries.mjs`'s `allowedImports` against both new source files by hand |
+
+One local cleanup note: the manual smoke test above was run once against the
+actual worktree root (not a scratch copy) before its `.runtime/` and
+`.public/` output were deleted with `rm -rf` prior to committing — both are
+gitignored and were never staged, but noted here for transparency since nothing
+outside this session's own throwaway artifacts was touched.
+
+Node version: same as prior slices (v26.7.0 locally; CI covers 24 and 26). No
+engine or dependency change in this slice.
+
+### Known limitations or unresolved issues
+
+- `status` has no `npm run` script alias (only `doctor`/`morning:plan` do,
+  per the existing `package.json`); it is invoked directly as
+  `node dist/src/cli.js status ...`, documented as such in `docs/runtime.md`.
+  Adding an `npm run status` alias is a one-line `package.json` change if
+  wanted, left out here since it wasn't asked for and is easy to add later.
+- The 90-day/180-day retention windows and the 6-hour lock-staleness window
+  are fixed constants (`src/ledger.ts`, `src/lock.ts`), not configurable via
+  `targets/runtime.json`. Nothing in the deliverables asked for
+  configurability, and adding it would be scope beyond "define retention."
+- Everything else named in the Slice 2.1 deliverables list (`status`,
+  expanded `doctor`, single-instance lock, stale-lock recovery, retention) is
+  implemented and tested. No scheduler, Notion write, or job-board access was
+  added, per the continuation constraints.
+
+### Deviation from the supplied plan
+
+One, flagged and reasoned through during implementation rather than
+discovered after the fact: `doctor`'s exit-and-output handling now
+prints-then-sets-`process.exitCode` instead of throwing through the shared
+`main().catch()` handler, so a partially-failing report is still fully
+printed to stdout. `plan` and `status` keep the original throw-once, stderr-
+only-on-failure contract. This was in the reviewed plan under "doctor
+expansion," not an undocumented change.
+
+### Recommended next step
+
+Review and merge the PR for this branch. Slice 2.2 (macOS scheduling and
+recovery) requires an Opus planning/design review per
+`CHATGPT_TO_CLAUDE_HANDOFF.md`'s operating rule (credential loading via
+Keychain, LaunchAgent generation) before any Sonnet implementation begins;
+do not start Slice 2.2 implementation directly from this handoff.

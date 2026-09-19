@@ -20,15 +20,22 @@ Two Snapshot sources feed a pure planner:
 Both produce a `Snapshot` validated against `src/domain.ts`'s Zod schemas.
 `src/planner.ts` turns a snapshot plus a clock and timezone into a
 deterministic `Plan` (due targets, follow-ups due today, and review items for
-ambiguous or malformed rows). `src/cli.ts` wires the two commands to that
+ambiguous or malformed rows). `src/cli.ts` wires three commands to that
 core differently:
 
-- `morning:plan` calls `src/workflow.ts`'s `runMorning`, which reads the
-  source, plans, and (unless `--no-record`) records the result to the
+- `morning:plan` calls `src/workflow.ts`'s `runMorning`, which acquires the
+  run lock (see "Concurrency and the run lock" below), reads the source,
+  plans, and (unless `--dry-run` or `--no-record`) records the result to the
   SQLite ledger.
-- `doctor` reads the source and calls `planMorning` directly. It never goes
-  through `runMorning` and never touches the ledger, by design: doctor is a
-  read-only diagnostic and must not create or update a run record.
+- `doctor` runs a set of independent operational checks (`src/doctor.ts`:
+  Node version, the private runtime directory, gitignore coverage,
+  configuration, and source/schema) and calls `planMorning` directly for the
+  source/schema check. It never goes through `runMorning`, never takes the
+  run lock, and never touches the ledger, by design: doctor is a read-only
+  diagnostic and must not create or update a run record.
+- `status` reads only the local ledger (`RunLedger.readLatest`, `src/ledger.ts`)
+  for the most recent recorded run under the current configuration. It never
+  reads the source, never contacts Notion, and never takes the run lock.
 
 ## Node requirement
 
@@ -105,19 +112,24 @@ that frequency is not being read from Notion.
 ## Commands
 
 ```bash
-npm run morning:plan -- [--demo | --config targets/runtime.json] [--json] [--no-record]
+npm run morning:plan -- [--demo | --config targets/runtime.json] [--json] [--dry-run] [--no-record]
 npm run doctor -- [--demo | --config targets/runtime.json] [--json]
+node dist/src/cli.js status [--demo | --config targets/runtime.json] [--json]
 ```
+
+(`status` has no `npm run` alias; it is small and diagnostic enough to run
+directly against the compiled CLI, the same way `--help` is not scripted.)
 
 - `--demo` uses the fixture snapshot at `tests/fixtures/snapshot.json` and
   never contacts Notion. Output is fictional, always prefixed
   "Fictional demo data" in text mode.
-- `--config <path>` points at an alternate runtime config; omitted, both
+- `--config <path>` points at an alternate runtime config; omitted, all three
   commands default to `targets/runtime.json`.
-- `--json` prints the machine-readable plan or doctor result instead of the
-  text digest.
+- `--json` prints the machine-readable plan, doctor report, or status result
+  instead of the text form.
 - `--at <ISO timestamp with offset>` injects a fixed clock, for reproducible
-  output in tests or manual checks.
+  output in tests or manual checks. `status` uses it the same way `plan` and
+  `doctor` do, to decide what "today" is when comparing against the ledger.
 - `--no-record` skips writing to the local SQLite ledger.
 - `--dry-run` also skips writing to the local SQLite ledger, and additionally
   marks the output as a dry run: the JSON result gets a top-level `dryRun:
@@ -125,16 +137,64 @@ npm run doctor -- [--demo | --config targets/runtime.json] [--json]
   the ledger"`. This distinguishes an explicit, auditable dry run from a
   plain `--no-record` invocation in scripts or logs that inspect the output.
   `--dry-run` takes effect even if `--record`-equivalent behavior were passed
-  by mistake elsewhere: the workflow never constructs a `RunLedger` when
-  `--dry-run` is set, regardless of `--no-record`.
+  by mistake elsewhere: the workflow never constructs a `RunLedger` (or takes
+  the run lock) when `--dry-run` is set, regardless of `--no-record`.
 - `--dry-run` and `--no-record` are only accepted with `plan`. Passing either
-  to `doctor` fails with a `CONFIG` error, because `doctor` never writes to
-  the ledger and accepting a flag that has no effect there would be the same
-  silently-ignored-option problem the flags themselves used to have.
+  to `doctor` or `status` fails with a `CONFIG` error, because neither writes
+  to the ledger and accepting a flag that has no effect there would be the
+  same silently-ignored-option problem the flags themselves used to have.
 
-Both commands are read-only with respect to Notion and to any job board:
-neither scans job listings, writes to Notion, submits an application, sends
-a message, or installs a scheduler.
+### `doctor`
+
+`doctor` runs every check independently and reports all of them together,
+even when one has failed, so a single broken check never hides the others.
+The JSON report's shape is `{ok, worstCode, checks: {node, runtimeDir,
+gitignore, config, source}, counts, warning}`:
+
+- `node`: compares the running interpreter (`process.versions.node`) against
+  `package.json`'s `engines.node` contract.
+- `runtimeDir`: if `.runtime` exists, checks it is a real directory (not a
+  symlink) at mode `0700`; if it does not exist yet, checks the repository
+  root is writable so a future run could create it. Never creates anything.
+- `gitignore`: confirms `.gitignore` has a literal line for each of
+  `profile/`, `pipeline/`, `prep/`, `targets/`, `.runtime/`, and `.env`. This
+  is a plain string check, not a `git check-ignore` call: `src/**/*.ts` may
+  not spawn a subprocess (see "Privacy boundary" below), so this mirrors
+  `scripts/check-boundaries.mjs`'s equivalent check without shelling out.
+- `config`: whether the selected configuration (`--demo` or `--config`)
+  loaded and validated.
+- `source`: whether the configured source could be read and, for a Notion
+  source, whether its schema still matches the field mapping. Reported as
+  `skipped: true` when `config` itself failed, since there is nothing to read.
+
+`report.ok` is `true` only if every check passed. `report.worstCode` names
+the `AppError` code of whichever failing check is worth surfacing first
+(`config`'s error, or `source`'s if config passed) and is `null` when
+`ok` is `true`; the CLI process exit code is derived from it the same way a
+thrown error's exit code is derived (see "Exit behavior" below).
+
+### `status`
+
+`status` answers "did the workflow run today, and how did it go?" without
+reading the source or contacting Notion: it looks up the most recent
+`runs` row whose logical key matches the current configuration's hash
+(`logicalKeyPrefix` in `src/workflow.ts`) and reports one of four states:
+
+- `never_run`: no matching row exists yet (including when `.runtime` itself
+  has never been created — `status` never creates it).
+- `stale`: a row exists, but its date does not match today's Melbourne
+  business date. The workflow has not completed a run for today yet, whether
+  or not yesterday's run succeeded.
+- `success` / `failed`: a row exists for today's date, with that status.
+  `failed` also reports the recorded `errorCode` (the safe `AppError` code
+  only, e.g. `"NOTION"` — never a message or business data).
+
+`status` never reports `plan_json` or `digest`; its JSON output is
+`{state, date, timezone, latestRunDate, revision, errorCode}` only.
+
+Both `doctor` and `status` are read-only with respect to Notion and to any
+job board: neither scans job listings, writes to Notion, submits an
+application, sends a message, or installs a scheduler.
 
 ## Exit behavior
 
@@ -146,12 +206,52 @@ a message, or installs a scheduler.
 | `2` | Default: `CONFIG`, `SCHEMA`, `AUTH`, `INPUT`, or `POLICY` failure |
 | `3` | `NOTION`: a Notion-side read or pagination failure |
 | `4` | `STORAGE`: the local SQLite ledger could not be opened or written |
+| `5` | `LOCKED`: another `plan` invocation currently holds the run lock |
+
+`src/errors.ts`'s `exitCodeFor` is the single source of this mapping; both
+the top-level CLI error handler and `doctor`'s own (non-throwing) exit-code
+selection call it, so the two never drift apart.
 
 On any failure, the process prints a single JSON line (`{"error": <code>,
 "message": <safe message>}`) to stderr. Raw provider errors, stack traces,
 and any value that could contain a token or private row are never included;
 `src/errors.ts`'s `safeError` collapses anything that is not already a
 deliberate `AppError` into a generic, non-leaking message.
+
+## Concurrency and the run lock
+
+`src/lock.ts`'s `acquireLock` gives `runMorning` a process-wide single-
+instance lock over the complete workflow, including the remote Notion read:
+two overlapping `plan` invocations (a manual run racing a stray scheduled
+one, say) cannot both read the source and write the ledger at once. The lock
+is only engaged when a run would actually touch local state — i.e. when
+`record` is true and `--dry-run` was not passed — mirroring exactly when the
+ledger itself gets touched, so `--no-record`/`--dry-run` keep their existing
+"no local footprint at all" guarantee. `doctor` and `status` never take the
+lock; neither one writes to the ledger.
+
+The lock is a single file, `.runtime/morning.lock`, holding `{pid, startedAt,
+token}` as JSON, created with an exclusive (`O_EXCL`) open so two processes
+can never both believe they hold it. If the file already exists, `acquireLock`
+checks whether it is stale before giving up:
+
+- the recorded `pid` is no longer running (`process.kill(pid, 0)` raises
+  `ESRCH`), or
+- the lock is older than 6 hours regardless of `pid` liveness — far longer
+  than any real run against one Notion database should take, and a guard
+  against the recorded `pid` having since been reused by an unrelated
+  process.
+
+A stale lock is deleted and acquisition retried once; if the retry also
+fails (another process legitimately raced us), or the existing lock is not
+stale, `acquireLock` throws `LOCKED` (exit code `5`) rather than silently
+serializing or blocking — an unattended run should fail loudly, not wait.
+Releasing a lock re-reads the file first and only removes it if its `token`
+still matches the one this process wrote, so a release can never delete a
+lock a different process has since legitimately acquired (for example, after
+this process itself was the one recovered as stale). The same symlink and
+permission checks used for `.runtime` elsewhere (`src/ledger.ts`'s
+constructor) apply here too.
 
 ## SQLite ledger location
 
@@ -188,6 +288,26 @@ provider error text. But `.runtime/runs.sqlite` as a whole is private
 business data, not a sanitized audit log; treat it the same as `pipeline/`
 or `targets/`, never copy it into a publishable path, a handoff document,
 or chat.
+
+### Retention
+
+Every `record()` call also prunes both tables by age, in the same
+transaction as the write it rides in on, so pruning is atomic and needs no
+separate command or schedule:
+
+- `runs` rows older than **90 days** (`RUN_RETENTION_DAYS`, `src/ledger.ts`)
+  are deleted. This table holds full business data (`plan_json`, `digest`),
+  so it is pruned sooner.
+- `events` rows older than **180 days** (`EVENT_RETENTION_DAYS`) are deleted.
+  This table is already redacted (no business data, just outcome and error
+  class), so it is kept longer for a coarser operational history.
+
+The age check is relative to the run being recorded (`observedAt`), not wall
+clock time, so retention stays deterministic under `--at` and in tests.
+This is currently the only local operational retention policy: there is no
+separate log file yet (that arrives with the LaunchAgent scheduler in a
+later slice), so `.runtime/runs.sqlite` is the entire local operational
+record this applies to.
 
 ## Read-only guarantees
 
@@ -252,4 +372,8 @@ already contains an unexpected file.
 | `NOTION` error mid-run | Transient Notion outage, network failure, or pagination did not advance | Retry later; this never leaves a stale successful plan for the same logical run key |
 | `STORAGE` error | `.runtime/` is missing write permission, is a symlink, or the ledger file/journal has an unexpected link count | Fix local file permissions on `.runtime/`; do not hand-edit `.runtime/runs.sqlite` |
 | `POLICY` error | The read-only transport blocked a request that did not match the one allowed GET and the one allowed POST | This indicates a code defect, not a configuration problem; do not work around it by relaxing the transport |
-| `CONFIG` error naming `--dry-run`/`--no-record` on `doctor` | Those flags only apply to `plan` | Drop them; `doctor` is always read-only and never writes to the ledger |
+| `CONFIG` error naming `--dry-run`/`--no-record` on `doctor` or `status` | Those flags only apply to `plan` | Drop them; `doctor` and `status` are always read-only and never write to the ledger |
+| `LOCKED` error on `plan` | Another `plan` invocation is currently running (or left a lock less than 6 hours old from a `pid` that is still alive) | Wait for the other run to finish; if you are certain nothing is actually running, check for and stop a stuck process, then remove `.runtime/morning.lock` by hand |
+| `doctor` reports `runtimeDir` or `gitignore` as failed | `.runtime` is a symlink or has unexpected permissions, or `.gitignore` is missing an entry for a private path | Fix `.runtime`'s permissions/symlink status directly; add the missing line(s) to `.gitignore` |
+| `doctor` reports `node` as failed | The running Node version does not meet `package.json`'s `engines.node` | Switch to a Node version matching `.nvmrc` (currently `24`) |
+| `status` reports `stale` | The workflow has not completed a run for today's Melbourne business date yet, whether or not a previous day's run succeeded | Run `npm run morning:plan`; `stale` on its own is not a failure, just "hasn't happened yet today" |
