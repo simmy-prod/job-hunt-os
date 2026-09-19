@@ -15,6 +15,7 @@
     "check": "npm run typecheck && npm run lint && npm test && npm run privacy:check",
     "morning:plan": "npm run compile --silent && node dist/src/cli.js plan",
     "doctor": "npm run compile --silent && node dist/src/cli.js doctor",
+    "schedule": "npm run compile --silent && node dist/src/cli.js schedule",
     "privacy:check": "node scripts/check-boundaries.mjs",
     "build:public": "node scripts/build-public.mjs"
   },

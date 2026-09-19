@@ -38,6 +38,11 @@ export const configSchema = z.strictObject({
     z.strictObject({driver: z.literal("snapshot"), path: text}),
     notionConfigSchema,
   ]),
+  // Optional and absent by default: a config without it never runs unattended.
+  schedule: z.strictObject({
+    enabled: z.boolean(),
+    time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/, "Expected HH:MM in 24-hour time"),
+  }).optional(),
 });
 export type Config = z.infer<typeof configSchema>;
 export type NotionConfig = z.infer<typeof notionConfigSchema>;
@@ -53,4 +58,10 @@ export async function loadConfig(path: string): Promise<Config> {
     config.source.path = resolve(dirname(path), config.source.path);
   }
   return config;
+}
+
+// The fields that change what a plan means. Scheduling settings are excluded so
+// that editing the schedule never forks a day's logical run key.
+export function planningConfig(config: Config): Pick<Config, "schemaVersion" | "timezone" | "source"> {
+  return {schemaVersion: config.schemaVersion, timezone: config.timezone, source: config.source};
 }

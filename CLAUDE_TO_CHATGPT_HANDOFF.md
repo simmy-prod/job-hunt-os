@@ -1,5 +1,106 @@
 # Claude to ChatGPT Handoff
 
+## Latest: Slice 2.2, macOS scheduling and recovery (branch `feature/slice-2.2-scheduler`)
+
+### What was implemented
+
+- `npm run schedule -- <run | status | preview | install | uninstall>`. A
+  per-user LaunchAgent (`local.job-hunt-os.morning-plan`) runs
+  `node dist/src/cli.js schedule run` directly: no shell, no Claude Code,
+  Codex, MCP, or LLM. Triggers: `RunAtLoad`, a daily calendar time, and an
+  hourly re-check.
+- One logical result per business day: a scheduled trigger skips quietly if
+  the day's key already succeeded, if the configured time has not arrived in
+  the business timezone, or if scheduling is disabled.
+- Scheduled runs reuse Slice 2.1's `.runtime/morning.lock` run lock (shared
+  with manual recorded runs), covering the success check and the Notion
+  read. A held lock makes a trigger report `busy` and exit 0; stale-lock
+  recovery is Slice 2.1's (dead PID or 6-hour age).
+- Failures are recorded (code only), retried by later triggers, and capped at
+  3 scheduled attempts per day. Manual runs are never capped.
+- Scheduled runs read the standalone Notion token from the macOS login
+  Keychain via `/usr/bin/security` only when a run is actually due. Manual
+  runs are unchanged (`NOTION_TOKEN` env, no fallback).
+- Kill switch: `schedule.enabled: false` in private `targets/runtime.json`.
+  A config without a `schedule` block is never scheduled.
+
+### Files changed
+
+- New: `src/scheduler.ts`, `src/credentials.ts`, `tests/scheduler.test.ts`,
+  `tests/credentials.test.ts`.
+- Changed: `src/cli.ts` (`schedule` subcommands beside `plan`, `doctor`,
+  `status`), `src/config.ts` (optional `schedule` block and
+  `planningConfig`, which keeps the block out of the run-key hash),
+  `src/ledger.ts` (schema v2: `events.invoker`, in-place v1 migration,
+  `latestStatus`, `failedAttempts`, read-only `readScheduledFailures`),
+  `src/lock.ts` (read-only `inspectLock`), `src/workflow.ts` (shared
+  `executeRun`, `logicalKey`), `scripts/check-boundaries.mjs`,
+  `tests/cli.test.ts`, `tests/privacy.test.ts`,
+  `templates/runtime-config.json`, `package.json` (`schedule` script),
+  `docs/runtime.md`, `README.md`.
+
+### Important technical decisions
+
+1. The runtime never runs `launchctl`. `install` / `uninstall` write or remove
+   one plist and print the exact command. This keeps the runtime's
+   subprocess surface to a single read-only binary.
+2. `node:child_process` is allowed only in `src/credentials.ts`, and the
+   boundary checker enforces that every call there uses the literal
+   `/usr/bin/security`. Any shell, `claude`, `codex`, alias, or other file
+   fails `npm run privacy:check`.
+3. An hourly `StartInterval` was added on top of `RunAtLoad` + calendar time.
+   It is a no-op after the day succeeds, and it is the in-day retry path and
+   the fix for a system timezone that differs from `Australia/Melbourne`.
+4. No second lock. The first version of this branch predated Slices 2.0 and
+   2.1 and carried its own SQLite lease; after they merged, that lease was
+   removed and the scheduler now uses Slice 2.1's file lock, ledger record
+   validation, and retention unchanged.
+5. `logicalKeyPrefix` now hashes only the planning fields (`schemaVersion`,
+   `timezone`, `source`). For a config with no `schedule` block the key is
+   byte-identical to before, so existing ledger history and `status` are
+   unaffected.
+
+### Tests run and results
+
+- `npm run check`: pass (typecheck, lint, 140 of 140 tests, merged with Slices 2.0 and 2.1, privacy check).
+- `npm run build:public`: pass, `.public/` holds only `index.html` and `data.json`.
+- `git diff --check`: clean.
+- Scheduler tests cover duplicate triggers, simultaneous triggers, manual vs
+  scheduled races, crashed-process and aged lock recovery, v1 ledger
+  migration, Melbourne midnight, both DST transitions, business-timezone
+  gating independent of system timezone, failure recording, retry, the
+  3-attempt cap, credential and raw-error redaction, the read-only Notion
+  operations, disabled scheduling, plist content, and install/uninstall in
+  temporary directories only.
+- Manual end to end (fictional fixture config): first run succeeded,
+  duplicate was silent, three parallel triggers produced one success and two
+  `busy`, a manual `plan` against a held lock exited 5 while a scheduled
+  trigger reported `busy` with exit 0, a malformed source produced a redacted
+  failure with exit 2, and Slice 2.1's `status` reported the scheduled
+  failure. The generated plist passed `plutil -lint`. No real
+  LaunchAgent was installed and the real Keychain was never written.
+
+### Known limitations or unresolved issues
+
+- `.runtime/logs/scheduler.log` is not rotated (Slice 2.1 retention covers
+  the SQLite ledger only). It gets about one line per day, so this is low risk.
+- Not yet exercised under real launchd or with the real Keychain token; that
+  needs Simmy to run the setup steps in `docs/runtime.md`.
+- The plist pins the absolute Node binary (a versioned Homebrew path on this
+  Mac). After a Node upgrade, re-run `npm run schedule -- install`;
+  `schedule status` reports `installed, out of date`.
+- CI covers Node 24 and 26; locally only Node 26 was available.
+
+### Recommended next action
+
+Review the PR. If approved, Simmy follows "Local setup" in `docs/runtime.md`
+from the main checkout and confirms one real scheduled run with
+`npm run schedule -- status`.
+
+---
+
+## Historical: read-only morning planner foundation
+
 ## Summary
 
 Completed and verified the read-only morning planner slice as scoped. The only

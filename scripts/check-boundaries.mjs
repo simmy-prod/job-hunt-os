@@ -9,6 +9,16 @@ const allowedImports = new Set([
   "node:crypto", "node:fs", "node:fs/promises", "node:path", "node:url", "node:util", "node:sqlite",
   "@notionhq/client", "zod",
 ]);
+// The runtime may start exactly one subprocess: the read-only macOS Keychain
+// lookup in src/credentials.ts. Anything else (a shell, claude, codex) is rejected.
+const credentialFile = "src/credentials.ts";
+const keychainBinary = "/usr/bin/security";
+function isKeychainImport(node, filename) {
+  const bindings = node.importClause?.namedBindings;
+  return filename === credentialFile && ts.isImportDeclaration(node) && !node.importClause?.name && !node.importClause?.isTypeOnly &&
+    bindings !== undefined && ts.isNamedImports(bindings) && bindings.elements.length === 1 &&
+    bindings.elements[0].name.text === "execFileSync" && !bindings.elements[0].propertyName;
+}
 export function checkRuntimeSource(source, filename) {
   const errors = [];
   const ast = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true);
@@ -17,7 +27,16 @@ export function checkRuntimeSource(source, filename) {
       const specifier = node.moduleSpecifier;
       if (specifier && ts.isStringLiteral(specifier)) {
         const name = specifier.text;
-        if (!name.startsWith("./") && !allowedImports.has(name)) errors.push(`Unapproved runtime import in ${filename}`);
+        const approved = name.startsWith("./") || allowedImports.has(name) ||
+          (name === "node:child_process" && isKeychainImport(node, filename));
+        if (!approved) errors.push(`Unapproved runtime import in ${filename}`);
+      }
+    }
+    if (ts.isIdentifier(node) && node.text === "execFileSync" && filename === credentialFile && !ts.isImportSpecifier(node.parent)) {
+      const call = node.parent;
+      const binary = ts.isCallExpression(call) && call.expression === node ? call.arguments[0] : undefined;
+      if (!binary || !ts.isStringLiteral(binary) || binary.text !== keychainBinary) {
+        errors.push(`Subprocess in ${filename} must call ${keychainBinary} directly`);
       }
     }
     if (ts.isCallExpression(node)) {

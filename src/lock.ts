@@ -97,3 +97,11 @@ export function acquireLock(root: string): Lock {
     },
   };
 }
+
+// Read-only view of the lock for `schedule status`. Never creates .runtime.
+export function inspectLock(root: string): "free" | "held" | "stale" {
+  const path = join(realpathSync(root), ".runtime", "morning.lock");
+  if (!existsSync(path)) return "free";
+  const existing = readLock(path);
+  return existing && !isStale(existing) ? "held" : "stale";
+}

@@ -14,6 +14,8 @@ export type RunRecord =
   | {status: "success"; logicalKey: string; observedAt: string; plan: Plan}
   | {status: "failed"; logicalKey: string; observedAt: string; errorCode: ErrorCode};
 
+export type Invoker = "manual" | "scheduled";
+
 export interface LatestRun {
   logicalKey: string;
   status: "success" | "failed";
@@ -49,7 +51,7 @@ export class RunLedger {
       this.db = new DatabaseSync(database, {timeout: 5_000});
       chmodSync(database, 0o600);
       const version = this.db.prepare("PRAGMA user_version").get()?.user_version;
-      if (version !== 0 && version !== 1) {
+      if (version !== 0 && version !== 1 && version !== 2) {
         this.db.close();
         throw new Error();
       }
@@ -71,14 +73,26 @@ export class RunLedger {
           outcome TEXT NOT NULL,
           error_code TEXT
         ) STRICT;
-        PRAGMA user_version = 1;
       `);
+      // Version 2 records who triggered each event, so the scheduler can cap
+      // its own retries. Re-checked under the write lock so two processes
+      // opening an old ledger at once cannot both run the ALTER.
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        if (this.db.prepare("PRAGMA user_version").get()?.user_version !== 2) {
+          this.db.exec("ALTER TABLE events ADD COLUMN invoker TEXT; UPDATE events SET invoker = 'manual'; PRAGMA user_version = 2;");
+        }
+        this.db.exec("COMMIT");
+      } catch (error) {
+        if (this.db.isTransaction) this.db.exec("ROLLBACK");
+        throw error;
+      }
     } catch {
       throw new AppError("STORAGE", "Cannot open the private run ledger. Check file permissions and ledger schema version.");
     }
   }
 
-  record(record: RunRecord): void {
+  record(record: RunRecord, invoker: Invoker = "manual"): void {
     // Validated before any SQLite statement: an invalid or ambiguous record
     // (both plan and errorCode, or neither) must never reach the ledger.
     validate(workflowRunSchema, record, "Workflow run record");
@@ -97,8 +111,8 @@ export class RunLedger {
         record.status === "failed" ? record.errorCode : null,
       );
       // Events intentionally contain no target names, URLs, tokens, notes, or raw errors.
-      this.db.prepare("INSERT INTO events (logical_key, observed_at, outcome, error_code) VALUES (?, ?, ?, ?)").run(
-        record.logicalKey, record.observedAt, record.status, record.status === "failed" ? record.errorCode : null,
+      this.db.prepare("INSERT INTO events (logical_key, observed_at, outcome, error_code, invoker) VALUES (?, ?, ?, ?, ?)").run(
+        record.logicalKey, record.observedAt, record.status, record.status === "failed" ? record.errorCode : null, invoker,
       );
       // Retention runs in the same transaction as every write, so the ledger
       // never grows unboundedly and pruning is atomic with the record it rides in on.
@@ -115,7 +129,36 @@ export class RunLedger {
     }
   }
 
+  latestStatus(logicalKey: string): "success" | "failed" | null {
+    const row = this.db.prepare("SELECT status FROM runs WHERE logical_key = ?").get(logicalKey);
+    return !row ? null : row.status === "success" ? "success" : "failed";
+  }
+
+  failedAttempts(logicalKey: string, invoker: Invoker): number {
+    return countFailures(this.db, logicalKey, invoker);
+  }
+
   close(): void { this.db.close(); }
+
+  // Read-only failure count for `schedule status`. A version 1 ledger predates
+  // scheduling, so it has no scheduled failures to report.
+  static readScheduledFailures(root: string, logicalKey: string): number {
+    const directory = join(realpathSync(root), ".runtime");
+    const database = join(directory, "runs.sqlite");
+    if (!existsSync(database)) return 0;
+    try {
+      if (lstatSync(directory).isSymbolicLink()) throw new Error();
+      if (lstatSync(database).isSymbolicLink() || !lstatSync(database).isFile() || lstatSync(database).nlink !== 1) throw new Error();
+      const db = new DatabaseSync(database, {readOnly: true, timeout: 5_000});
+      try {
+        return db.prepare("PRAGMA user_version").get()?.user_version === 2 ? countFailures(db, logicalKey, "scheduled") : 0;
+      } finally {
+        db.close();
+      }
+    } catch {
+      throw new AppError("STORAGE", "Cannot read the private run ledger. Check file permissions and ledger schema version.");
+    }
+  }
 
   // Read-only: never creates .runtime or the ledger file. Used by `status`,
   // which must not have a side effect just from being run.
@@ -148,4 +191,9 @@ export class RunLedger {
       throw new AppError("STORAGE", "Cannot read the private run ledger. Check file permissions and ledger schema version.");
     }
   }
+}
+
+function countFailures(db: DatabaseSync, logicalKey: string, invoker: Invoker): number {
+  return Number(db.prepare("SELECT count(*) AS n FROM events WHERE logical_key = ? AND outcome = 'failed' AND invoker = ?")
+    .get(logicalKey, invoker)?.n ?? 0);
 }
