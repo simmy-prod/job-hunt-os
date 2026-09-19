@@ -1,6 +1,208 @@
 # Claude to ChatGPT Handoff
 
-## Latest: Slice 2.2, macOS scheduling and recovery (branch `feature/slice-2.2-scheduler`)
+## Latest: Slice 3.0, job discovery and normalization contracts (branch `feature/slice-3-discovery`, [PR #13](https://github.com/simmy-prod/job-hunt-os/pull/13), open, not merged)
+
+Branch created from `origin/master` at `2c9fd1a` only after confirming
+Slice 2.0/2.1/2.2 (PRs #9, #12, #10) were actually merged; an earlier attempt
+to start this branch found `master` still at the pre-Slice-2.0 gate cleanup
+(PR #8) with the slice-2 branches unmerged, so it was paused and restarted
+once Simmy confirmed the merge. Scope per `CHATGPT_TO_CLAUDE_HANDOFF.md`'s
+Slice 3.0 deliverables ("discovery contracts without a live provider"): job
+discovery and normalization only. No live adapter, no Notion write, no
+application submission, no message, no interview automation.
+
+### What was implemented
+
+- `src/jobSource.ts`: `JobSourceAdapter` interface (the only thing allowed to
+  reach a job board) and `readOnlyJobFetch`, a GET-only, HTTPS-only,
+  host-allowlisted (`APPROVED_JOB_SOURCE_HOSTS`: `boards-api.greenhouse.io`,
+  `api.lever.co`), no-redirect, bounded-retry transport mirroring
+  `src/notion.ts`'s `readOnlyFetch`. `fetchAllListings` walks pages with the
+  same non-advancing-cursor and page-budget guards as the Notion reader. No
+  adapter exists yet; nothing in this slice contacts a real host.
+- `src/normalize.ts`: `normalizeListing` turns one untrusted raw listing into
+  either a `Listing` or a `DiscoveryReview`, never throwing on bad input.
+  Identity is `${sourceId}:${externalId}`, a pure function of the raw
+  listing's own fields, not a counter. `contentHashOf` hashes
+  title/company/canonicalUrl/locations/employmentType/compensationText so a
+  changed listing can be told apart from an unchanged one. `normalizeBatch`
+  deduplicates repeated external IDs within one fetch deterministically
+  (last occurrence wins). `evaluateMatch` judges a normalized listing against
+  a matching config with a fixed precedence: any disqualifying signal
+  (excluded title keyword, or a known employment type outside an allowed
+  list) forces `not_a_match`; otherwise any ambiguous signal (unknown
+  employment type when a restriction is configured, or missing pay when
+  required) forces `needs_review`, even for a title that would otherwise
+  match; otherwise an included title keyword gives `match`; otherwise
+  `needs_review`.
+- `src/discoveryStore.ts`: private local persistence at
+  `.runtime/discovery.sqlite` (same safety rules as `src/ledger.ts`'s
+  `runs.sqlite`: no symlink, no multi-linked file, mode 0700/0600, separate
+  file). `mergeListings` upserts by identity so a changed listing updates in
+  place instead of duplicating, and never touches a listing absent from the
+  current run (a source that failed must not erase prior history).
+  `upsertReviews` maintains an open review queue keyed by
+  `(sourceId, externalId)`, cleared automatically the moment that identity
+  normalizes cleanly.
+- `src/discovery.ts`: `runDiscovery` runs every configured adapter
+  independently; one source's failure is isolated to its own
+  `SourceOutcome` (`ok`, `errorCode`, `fetched`, `duplicatesInBatch`) and
+  never blocks or corrupts another source's results or previously stored
+  listings.
+- `src/matchingConfig.ts` + `templates/matching-config.json`: private,
+  machine-readable matching configuration (`targets/matching.json`,
+  gitignored) for the Business Analyst / Administration / Coordinator
+  search: `titleIncludeKeywords`, `titleExcludeKeywords`,
+  `allowedEmploymentTypes` (`null` = no restriction),
+  `requireCompensation`, and a `ruleVersion` recorded on every decision. The
+  shipped template is permissive (`allowedEmploymentTypes: null`,
+  `requireCompensation: false`), since most real postings omit pay and not
+  every source labels employment type.
+- `src/domain.ts`: extended `listingSchema` with `employmentType`,
+  `compensationText` (both nullable), `firstSeenAt`, `lastSeenAt`; added
+  `discoveryReviewSchema`; exported `Listing`/`MatchDecision`/`DiscoveryReview`
+  types.
+- `src/errors.ts`: added a `SOURCE` error code for job-source read failures,
+  parallel to `NOTION`, mapped to the same exit code (3).
+- `docs/runtime.md`: new "Discovery" section covering the adapter boundary,
+  normalization, matching precedence, persistence, and the review queue,
+  plus a `SOURCE` troubleshooting row.
+
+### Two commits, because review caught a scope gap
+
+The first commit followed the session's literal fixture list (duplicates,
+malformed listings, changed listings, unavailable sources, pagination) and
+shipped title-only matching. Review against `CHATGPT_TO_CLAUDE_HANDOFF.md`'s
+own, fuller Slice 3.0 deliverables list (title inclusion, coding-role
+exclusion, location, **employment type**, **missing pay**, ambiguity,
+duplicates, changed content) caught that employment type and pay were
+missing entirely: no fields on the raw/normalized listing, no matching
+rules, no review reasons, no fixtures. The second commit closed that gap
+(the `allowedEmploymentTypes`/`requireCompensation` config, the two new
+listing fields, the rewritten `evaluateMatch` precedence, four new fixture
+listings, and targeted tests), without changing any already-shipped
+behavior for a config that leaves the new fields at their permissive
+defaults.
+
+### Important technical decisions
+
+1. **Employment type and pay are optional on the raw listing and never
+   block normalization.** Most real ATS listings omit pay, and not every
+   provider labels employment type; treating their absence as malformed
+   input would flood the review queue with normal postings. Absence is
+   preserved as `null`, and it is `evaluateMatch` (not normalization) that
+   turns an unknown value into a review item, only when the matching config
+   actually cares about that signal.
+2. **`evaluateMatch` collects every reason instead of returning on the first
+   check.** A decision's `reasons` array names everything that applies
+   (e.g., both a disallowed employment type and an excluded title keyword),
+   with a fixed precedence (disqualify > ambiguous > match) rather than
+   whichever check happened to run first.
+3. **A listing's identity is computed, not stored as a counter.** Because
+   `id = ${sourceId}:${externalId}` is a pure function of the adapter's own
+   fields, re-normalizing the same raw listing on a later run always
+   produces the same id, so `DiscoveryStore.mergeListings` can tell "changed
+   content, same identity" from "new identity" without needing a separate
+   identity-assignment step.
+4. **`DiscoveryStore` is a separate SQLite file
+   (`.runtime/discovery.sqlite`), not new tables in `runs.sqlite`.**
+   Discovery state and morning-plan run history are independent concerns
+   that should not share a schema migration path.
+5. **No adapter, and no CLI wiring, in this slice.** The deliverables are
+   "discovery contracts without a live provider": `JobSourceAdapter` and
+   `readOnlyJobFetch` define the boundary a Slice 3.1 Greenhouse adapter must
+   fit into, but nothing implements it yet, and there is nothing meaningful
+   for a CLI `discover` command to run against besides fixtures (which the
+   test suite already exercises directly). Adding a CLI command now would be
+   scope beyond what this slice's acceptance criteria ask for.
+6. **Found and fixed a latent bug in the existing shared `webUrl` schema**
+   (`src/domain.ts`): its `refine()` called `new URL(value)` without a
+   try/catch, so a genuinely unparseable string threw an uncaught
+   `TypeError` instead of failing validation cleanly. No prior test had fed
+   it anything the URL constructor itself would reject (only well-formed
+   URLs with the wrong protocol or embedded credentials); the new "invalid
+   url" review-item test was the first to hit it. Fixed by catching the
+   constructor and returning `false`, with no behavior change for any
+   previously-valid or previously-invalid input.
+
+### Files changed
+
+- New: `src/jobSource.ts`, `src/normalize.ts`, `src/discoveryStore.ts`,
+  `src/discovery.ts`, `src/matchingConfig.ts`,
+  `templates/matching-config.json`, `tests/jobSource.test.ts`,
+  `tests/normalize.test.ts`, `tests/discoveryStore.test.ts`,
+  `tests/discovery.test.ts`, `tests/fixtures/discovery-listings.json`.
+- Changed: `src/domain.ts` (listing/review schemas, `webUrl` fix),
+  `src/errors.ts` (`SOURCE` code), `docs/runtime.md` (Discovery section),
+  `tests/domain.test.ts`, `tests/helpers.ts` (fixture/adapter/matching-config
+  loaders).
+
+### Tests run and results
+
+- `npm run check`: pass (typecheck, lint, 178 of 178 tests, privacy check).
+  Up from 171 after the first commit and from Slice 2.2's 140+ baseline;
+  34 new discovery-specific tests total across both commits.
+- `npm run build:public`: pass, `.public/` unchanged (`index.html`,
+  `data.json` only).
+- `git diff --check`: clean on both commits.
+- New tests cover: duplicate external IDs within one fetch (deterministic,
+  last-occurrence-wins collapse), every malformed/ambiguous/incomplete raw
+  listing shape (each becomes a review item, never a thrown error), an
+  employment type outside an allowed list, an unknown employment type,
+  missing pay when required, changed content updating one listing identity
+  in place (never a duplicate row), a source that fails leaving previously
+  stored listings untouched, non-advancing-cursor and page-budget pagination
+  guards, and the read-only transport's host/method/credential/redirect
+  policy.
+- `npm run doctor -- --demo` and `npm run morning:plan -- --demo --no-record`:
+  spot-checked by hand after both commits (both touched the shared
+  `src/domain.ts`/`src/errors.ts`); output unchanged from pre-existing
+  behavior, confirming no regression to the Slice 2 runtime.
+
+### Known limitations or unresolved issues
+
+- No live adapter exists (by design; Slice 3.1 adds Greenhouse, Slice 3.2
+  adds Lever). `APPROVED_JOB_SOURCE_HOSTS` names both hosts now so the
+  transport's allowlist is enforced centrally before either adapter is
+  written, not left to each adapter's own discipline.
+- No CLI command runs discovery yet; it is exercised only by the test suite
+  against fixtures. Wiring a `discover`/`plan`-equivalent command through
+  `src/cli.ts` is reasonable scope for Slice 3.1, once there is a real
+  source to point it at.
+- `targets/matching.json` (private, gitignored, from
+  `templates/matching-config.json`) has not been created or run against real
+  data; unlike `targets/runtime.json`, there is nothing live to run it
+  against yet. Simmy has not been asked to customize the template's
+  `titleIncludeKeywords`/`titleExcludeKeywords` for anything beyond the
+  generic defaults already in the template.
+- Location is preserved and required to be non-empty (an empty-locations raw
+  listing becomes a review item), but there is no location-based match
+  filtering yet (e.g., excluding non-Melbourne, non-remote listings). Not
+  flagged as missing in review; can be added alongside a live adapter if
+  wanted.
+
+### Deviation from the supplied plan
+
+One: the deliverables list in `CHATGPT_TO_CLAUDE_HANDOFF.md` calls for Opus
+to plan Slice 3.0 before Sonnet implements it. This slice was implemented
+directly from the session's task instructions at Sonnet high effort, without
+a separate Opus planning pass beforehand. Flagged here rather than silently
+following the letter of "Sonnet implements bounded, approved slices" while
+skipping the planning-review step named for this specific slice.
+
+### Recommended next action
+
+Review [PR #13](https://github.com/simmy-prod/job-hunt-os/pull/13) against
+the full Slice 3.0 deliverables list above (now including employment type
+and pay). If approved and merged, Slice 3.1 (Greenhouse read-only adapter)
+is next per the roadmap; per the handoff's operating rule, do not begin it
+until this slice is explicitly approved, and consider whether Slice 3.1
+needs the same Opus review Slice 2.2 got before implementation, given it is
+the first slice to add real outbound network access.
+
+---
+
+## Slice 2.2, macOS scheduling and recovery (branch `feature/slice-2.2-scheduler`)
 
 ### What was implemented
 
