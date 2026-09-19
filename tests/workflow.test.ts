@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, existsSync, statSync, symlinkSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, existsSync, statSync, symlinkSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { runMorning } from "../src/workflow.js";
+import { acquireLock } from "../src/lock.js";
 import { AppError } from "../src/errors.js";
 import { config, now, snapshot } from "./helpers.js";
 
@@ -74,6 +75,24 @@ test("private output refuses a symlink into another directory", async () => {
   symlinkSync(outside, join(root, ".runtime"));
   await assert.rejects(runMorning({config, source: () => ({read: async () => snapshot()}), root, clock, record: true}), /not a symlink/);
   assert.equal(existsSync(join(outside, "runs.sqlite")), false);
+});
+test("a ledger that fails to open after the lock is acquired still releases the lock", async () => {
+  const root = temporary();
+  // .runtime itself is a normal directory (so lock acquisition succeeds),
+  // but the ledger's own target file is a symlink, so RunLedger's
+  // constructor fails after the lock has already been taken.
+  mkdirSync(join(root, ".runtime"), {mode: 0o700});
+  const elsewhereTarget = join(temporary(), "elsewhere.sqlite");
+  writeFileSync(elsewhereTarget, "");
+  symlinkSync(elsewhereTarget, join(root, ".runtime/runs.sqlite"));
+  await assert.rejects(
+    runMorning({config, source: () => ({read: async () => snapshot()}), root, clock, record: true}),
+    /Cannot open the private run ledger/,
+  );
+  assert.equal(existsSync(join(root, ".runtime/morning.lock")), false);
+  // A fresh acquisition succeeds immediately: no stale lock was left behind
+  // for the next run to have to recover from.
+  acquireLock(root).release();
 });
 test("no writes to the original pipeline or dashboard occur during a fixture run", async () => {
   const root = temporary();
