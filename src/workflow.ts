@@ -29,9 +29,16 @@ export async function runMorning(options: {
   // the same reason it wins for the ledger: the "never writes" guarantee must
   // not depend on the caller passing exactly one flag correctly.
   const active = options.record && !options.dryRun;
-  const lock: Lock | undefined = active ? acquireLock(options.root) : undefined;
-  const ledger = active ? new RunLedger(options.root) : undefined;
+  let lock: Lock | undefined;
+  let ledger: RunLedger | undefined;
   try {
+    // Both acquisitions happen inside the try so that a failure between them
+    // (the lock is taken, but the ledger then fails to open) still reaches
+    // the finally below and releases whatever was actually acquired, instead
+    // of leaking .runtime/morning.lock for a run that never got as far as
+    // starting the workflow it was meant to guard.
+    lock = active ? acquireLock(options.root) : undefined;
+    ledger = active ? new RunLedger(options.root) : undefined;
     const snapshot = await options.source().read();
     const plan = planMorning(snapshot, now, options.config.timezone);
     ledger?.record({status: "success", logicalKey, observedAt: now.toISOString(), plan});
