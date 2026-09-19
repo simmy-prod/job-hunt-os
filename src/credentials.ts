@@ -27,3 +27,9 @@ export function readKeychainToken(run: SecurityCommand = security): string {
   }
   return token;
 }
+
+// For comparison only (the write token must differ from every read token):
+// a missing, locked, or unsupported Keychain is not an error here.
+export function tryReadKeychainToken(run: SecurityCommand = security): string | undefined {
+  try { return readKeychainToken(run); } catch { return undefined; }
+}

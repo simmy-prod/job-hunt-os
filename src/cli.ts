@@ -1,23 +1,28 @@
 import { parseArgs } from "node:util";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createInterface } from "node:readline/promises";
 import { configSchema, loadConfig } from "./config.js";
 import type { Config } from "./config.js";
-import { readKeychainToken } from "./credentials.js";
+import { readKeychainToken, tryReadKeychainToken } from "./credentials.js";
 import { validate } from "./domain.js";
 import { runDoctorReport } from "./doctor.js";
 import type { DoctorReport } from "./doctor.js";
 import { AppError, exitCodeFor, safeError } from "./errors.js";
 import { RunLedger } from "./ledger.js";
 import { createNotionReader, NotionSnapshotSource } from "./notion.js";
+import { createNotionWriter, WRITE_TOKEN_ENV } from "./notion-writer.js";
 import { businessDate, digest } from "./planner.js";
 import { installLaunchAgent, LAUNCH_AGENT_LABEL, launchAgentPath, renderLaunchAgent, runScheduled, scheduleStatus,
   uninstallLaunchAgent, validateLaunchAgentPaths } from "./scheduler.js";
 import { FileSnapshotSource } from "./source.js";
 import { logicalKeyPrefix, runMorning } from "./workflow.js";
+import { applyWrites, approveWrite, listWrites, proposeWrite, readWriteCounts, rejectWrite } from "./write-workflow.js";
+import type { Prompter, WriteCounts } from "./write-workflow.js";
+import { intentFields, parseWriteRequest } from "./writes.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const commands = ["plan", "doctor", "status", "schedule"];
+const commands = ["plan", "doctor", "status", "schedule", "writes"];
 const usage = `Usage: npm run morning:plan -- [--demo | --config targets/runtime.json] [--json] [--dry-run] [--no-record]
        npm run doctor -- [--demo | --config targets/runtime.json] [--json]
        node dist/src/cli.js status [--demo | --config targets/runtime.json] [--json]
@@ -44,7 +49,27 @@ Scheduling (macOS LaunchAgent, see docs/runtime.md):
   schedule preview    Print the LaunchAgent plist without writing anything.
   schedule install    Write the LaunchAgent plist, then print the launchctl command to load it.
   schedule uninstall  Remove the LaunchAgent plist, then print the launchctl command to unload it.
-No command scans job boards or changes Notion.`;
+Allowlisted Notion writes (manual only, see docs/runtime.md "Write contract"):
+  writes propose <operation> --id <record id> [--date YYYY-MM-DD] [--action <text>] [--stage <stage>]
+                      [--demo | --config <path>] [--json] [--at]
+  writes approve <intent id> [--confirm-submitted]   Interactive terminal only.
+  writes reject <intent id> [--json]
+  writes apply [--dry-run | --execute] [--demo | --config <path>] [--json] [--at]
+                      Dry run unless --execute. --execute reads ${WRITE_TOKEN_ENV} from the environment.
+  writes status [--json]
+plan, doctor, status, and schedule never change Notion. No command scans job
+boards, submits an application, or sends a message.`;
+
+// Every accepted option is used by the subcommand; anything else is rejected.
+const writeOptions: Record<string, string[]> = {
+  propose: ["config", "demo", "json", "at", "id", "date", "action", "stage"],
+  approve: ["confirm-submitted", "at"],
+  reject: ["json", "at"],
+  apply: ["config", "demo", "json", "at", "dry-run", "execute"],
+  status: ["json"],
+};
+const writeOnlyOptions = ["id", "date", "action", "stage", "execute", "confirm-submitted"] as const;
+type Values = ReturnType<typeof parseCliArgs>["values"];
 
 const scheduleOptions: Record<string, string[]> = {
   run: ["config", "at", "json"], status: ["config", "at", "json"], preview: ["config"], install: ["config"], uninstall: [],
@@ -56,16 +81,26 @@ async function main(): Promise<void> {
   const {values, positionals} = args;
   if (values.help) { console.log(usage); return; }
   const [command, subcommand] = positionals;
-  const valid = command === "schedule" ? positionals.length === 2 && subcommand !== undefined && subcommand in scheduleOptions
-    : positionals.length === 1 && commands.includes(command ?? "");
+  const valid = command === "writes" ? subcommand !== undefined && subcommand in writeOptions
+    && positionals.length === (["propose", "approve", "reject"].includes(subcommand) ? 3 : 2)
+    : command === "schedule" ? positionals.length === 2 && subcommand !== undefined && subcommand in scheduleOptions
+      : positionals.length === 1 && commands.includes(command ?? "");
   if (!valid) throw new AppError("CONFIG", usage);
   if (command === "schedule") {
     const allowed = scheduleOptions[subcommand ?? ""] ?? [];
     const extra = Object.keys(values).filter((name) => !allowed.includes(name));
     if (extra.length) throw new AppError("CONFIG", `schedule ${subcommand} does not accept --${extra.join(", --")}.`);
   }
+  if (command === "writes") {
+    const allowed = writeOptions[subcommand ?? ""] ?? [];
+    const extra = Object.keys(values).filter((name) => !allowed.includes(name));
+    if (extra.length) throw new AppError("CONFIG", `writes ${subcommand} does not accept --${extra.join(", --")}.`);
+  } else {
+    const writeOnly = writeOnlyOptions.filter((name) => values[name] !== undefined);
+    if (writeOnly.length) throw new AppError("CONFIG", `--${writeOnly.join(", --")} only applies to writes commands.`);
+  }
   if (values.demo && values.config) throw new AppError("CONFIG", "Choose --demo or --config, not both.");
-  if (command !== "plan" && (values["dry-run"] || values["no-record"])) {
+  if (command !== "plan" && command !== "writes" && (values["dry-run"] || values["no-record"])) {
     throw new AppError("CONFIG", "--dry-run and --no-record only apply to plan; doctor and status never write to the ledger.");
   }
   if (values.at && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(values.at)) {
@@ -81,6 +116,10 @@ async function main(): Promise<void> {
     config.source.driver === "snapshot" ? new FileSnapshotSource(config.source.path)
       : new NotionSnapshotSource(config.source, createNotionReader(config.source, token()));
 
+  if (command === "writes") {
+    await writes(subcommand ?? "", positionals[2], values, now, resolveConfig, buildSource);
+    return;
+  }
   if (command === "schedule") {
     await schedule(subcommand ?? "", values, now, resolveConfig, buildSource);
     return;
@@ -102,6 +141,7 @@ async function main(): Promise<void> {
       state, date, timezone: config.timezone, latestRunDate: latestDate,
       revision: latest?.revision ?? null,
       errorCode: state === "failed" ? latest?.errorCode ?? null : null,
+      writes: readWriteCounts(root, config),
     };
     console.log(values.json ? JSON.stringify(result, null, 2) : renderStatusText(result));
     return;
@@ -111,6 +151,62 @@ async function main(): Promise<void> {
   const plan = await runMorning({config, source: () => buildSource(config), root, clock: {now: () => now}, record: !values["no-record"], dryRun});
   console.log(values.json ? JSON.stringify({...plan, dryRun}, null, 2)
     : `${values.demo ? "Fictional demo data\n" : ""}${dryRun ? "Dry run: nothing written to the ledger\n" : ""}${digest(plan)}`);
+}
+
+async function writes(subcommand: string, argument: string | undefined, values: Values, now: Date,
+  resolveConfig: () => Promise<Config>, buildSource: (config: Config) => FileSnapshotSource | NotionSnapshotSource): Promise<void> {
+  const clock = {now: () => values.at ? now : new Date()};
+  const print = (json: unknown, text: string) => console.log(values.json ? JSON.stringify(json, null, 2) : text);
+  if (subcommand === "propose") {
+    // Policy validation happens before any config, storage, or network access.
+    const request = parseWriteRequest({operation: argument, recordId: values.id,
+      ...(values.date === undefined ? {} : {date: values.date}), ...(values.action === undefined ? {} : {action: values.action}),
+      ...(values.stage === undefined ? {} : {stage: values.stage})});
+    const config = await resolveConfig();
+    const {intent, duplicate} = await proposeWrite({config, source: () => buildSource(config), root, clock, request});
+    const next = intent.state === "awaiting_approval" ? `npm run writes -- approve ${intent.id}` : "npm run writes -- apply";
+    print({id: intent.id, operation: intent.operation, state: intent.state, duplicate},
+      `${duplicate ? "Already proposed" : "Proposed"} ${intent.id}: ${intent.operation} (${intent.state}). Next: ${next}`);
+    return;
+  }
+  if (subcommand === "approve") {
+    // Checked before storage is opened: schedulers, pipes, CI, and agents cannot approve.
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      throw new AppError("POLICY", "Approval needs an interactive terminal. Schedulers, pipes, CI jobs, and coding agents cannot approve writes.");
+    }
+    const lines = createInterface({input: process.stdin, output: process.stdout});
+    const prompter: Prompter = {show: (line) => console.log(line), ask: (question) => lines.question(question)};
+    try {
+      const intent = await approveWrite({root, clock, id: argument!, attestSubmitted: values["confirm-submitted"] === true, prompter});
+      console.log(`Approved ${intent.id}. Nothing was sent. Next: npm run writes -- apply`);
+    } finally { lines.close(); }
+    return;
+  }
+  if (subcommand === "reject") {
+    const intent = rejectWrite({root, clock, id: argument!});
+    print({id: intent.id, state: intent.state}, `Rejected ${intent.id}. Nothing was sent.`);
+    return;
+  }
+  if (subcommand === "status") {
+    const intents = listWrites(root).map((intent) => ({id: intent.id, operation: intent.operation, recordId: intent.recordId,
+      state: intent.state, fields: intentFields(intent), attempts: intent.attempts, lastError: intent.lastError}));
+    print(intents, intents.length ? intents.map((item) => `${item.id} ${item.state} ${item.operation} ${item.recordId} [${item.fields.join(", ")}]${item.lastError ? ` last error ${item.lastError}` : ""}`).join("\n") : "No write intents.");
+    return;
+  }
+  if (values.execute && values["dry-run"]) throw new AppError("CONFIG", "Choose --dry-run or --execute, not both.");
+  const config = await resolveConfig();
+  const execute = values.execute === true;
+  if (execute && config.source.driver !== "notion") throw new AppError("CONFIG", "--execute needs a Notion source. Demo and snapshot sources only support dry runs.");
+  const result = await applyWrites({config, root, clock, execute, writer: () => {
+    if (config.source.driver !== "notion") throw new AppError("CONFIG", "Writes need a Notion source.");
+    // The write token must differ from every read credential: the env token and the Keychain token used by scheduled runs.
+    return createNotionWriter(config.source, {write: process.env[WRITE_TOKEN_ENV],
+      read: [process.env[config.source.tokenEnv], tryReadKeychainToken()]});
+  }});
+  print(result, [`${result.mode === "dry_run" ? "Dry run: nothing was sent." : "Executed."} ${result.results.length} open intents.`,
+    ...result.results.map((item) => `- ${item.id} ${item.operation} ${item.recordId} [${item.fields.join(", ")}]: ${item.outcome}${item.reason && item.reason !== item.outcome ? ` (${item.reason})` : ""}${item.errorCode ? ` (${item.errorCode})` : ""}`)].join("\n"));
+  // Any failed, conflicted, or retrying intent is a remote-side problem: exit like a NOTION failure.
+  if (!result.ok) process.exitCode = exitCodeFor("NOTION");
 }
 
 async function schedule(subcommand: string, values: {config?: string; json?: boolean}, now: Date,
@@ -175,12 +271,14 @@ function renderDoctorText(report: DoctorReport): string {
   return lines.join("\n");
 }
 
-function renderStatusText(result: {state: string; date: string; timezone: string; latestRunDate: string | null; revision: number | null; errorCode: string | null}): string {
+function renderStatusText(result: {state: string; date: string; timezone: string; latestRunDate: string | null; revision: number | null; errorCode: string | null; writes: WriteCounts | null}): string {
   const lines = [`Status: ${result.state} (today ${result.date}, ${result.timezone})`];
   if (result.latestRunDate) lines.push(`Latest recorded run: ${result.latestRunDate}${result.revision !== null ? ` (revision ${result.revision})` : ""}`);
   else lines.push("No run has been recorded for this configuration yet.");
   if (result.state === "stale") lines.push("The workflow has not completed a run for today yet.");
   if (result.errorCode) lines.push(`Last error class: ${result.errorCode}`);
+  const w = result.writes;
+  if (w) lines.push(`Writes: ${w.awaitingApproval} awaiting approval, ${w.approved} approved, ${w.inFlight} in flight, ${w.failed} failed, ${w.conflict} conflicted`);
   return lines.join("\n");
 }
 
@@ -188,6 +286,8 @@ function parseCliArgs() {
   return parseArgs({strict: true, allowPositionals: true, options: {
     config: {type: "string"}, demo: {type: "boolean"}, json: {type: "boolean"},
     "dry-run": {type: "boolean"}, "no-record": {type: "boolean"}, at: {type: "string"}, help: {type: "boolean"},
+    id: {type: "string"}, date: {type: "string"}, action: {type: "string"}, stage: {type: "string"},
+    execute: {type: "boolean"}, "confirm-submitted": {type: "boolean"},
   }});
 }
 

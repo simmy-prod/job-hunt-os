@@ -1,13 +1,17 @@
 # Deterministic runtime
 
-This document describes the read-only morning planner runtime under `src/`,
-run through `npm run morning:plan`, `npm run doctor`, `status`, and
-(unattended, on macOS) `npm run schedule`. It is separate from
+This document describes the deterministic runtime under `src/`: the
+read-only morning planner (`npm run morning:plan`, `npm run doctor`,
+`status`, and, unattended on macOS, `npm run schedule`) and the manual,
+allowlisted, human-confirmed Notion write path (`npm run writes`, see
+"Write contract"). It is separate from
 the user-invoked Claude Code skills in `.claude/skills` (`job-scan`,
 `interviewer-recon`, `company-deep-dive`, `interview-drill`,
 `profile-interview`) and the `/morning-hunt` command that sequences them.
 This runtime makes no model or LLM API calls; it is a plain Node.js program.
-It does call the read-only Notion API (see "Read-only guarantees" below).
+It calls the Notion API through two separate, locked-down transports: a
+read-only one for planning (see "Read-only guarantees") and a write one that
+can only set a few mapped properties (see "Write contract").
 
 ## Architecture
 
@@ -144,6 +148,11 @@ directly against the compiled CLI, the same way `--help` is not scripted.)
   to `doctor` or `status` fails with a `CONFIG` error, because neither writes
   to the ledger and accepting a flag that has no effect there would be the
   same silently-ignored-option problem the flags themselves used to have.
+- Write-only options (`--id`, `--date`, `--action`, `--stage`,
+  `--execute`, `--confirm-submitted`) are rejected on `plan`, `doctor`,
+  `status`, and `schedule`, and every `writes` subcommand rejects options it
+  does not use. For `writes apply`, `--dry-run` is the default (see "Write
+  contract").
 
 ### `doctor`
 
@@ -191,7 +200,12 @@ reading the source or contacting Notion: it looks up the most recent
   only, e.g. `"NOTION"`, never a message or business data).
 
 `status` never reports `plan_json` or `digest`; its JSON output is
-`{state, date, timezone, latestRunDate, revision, errorCode}` only.
+`{state, date, timezone, latestRunDate, revision, errorCode, writes}` only.
+`writes` is `null` until the first write is proposed; after that it is the
+count of this configuration's intents by state (`awaitingApproval`,
+`approved`, `inFlight`, `failed`, `conflict`), read from
+`.runtime/writes.sqlite` without opening it for writing or creating it.
+Counts only: no record ids, field names, or values.
 
 Both `doctor` and `status` are read-only with respect to Notion and to any
 job board: neither scans job listings, writes to Notion, submits an
@@ -218,7 +232,7 @@ below.
 |---|---|
 | `0` | Success |
 | `2` | Default: `CONFIG`, `SCHEMA`, `AUTH`, `INPUT`, or `POLICY` failure |
-| `3` | `NOTION`: a Notion-side read or pagination failure |
+| `3` | `NOTION`: a Notion-side read or pagination failure; or `writes apply --execute` finished with any intent failed, conflicted, or waiting to retry |
 | `4` | `STORAGE`: the local SQLite ledger could not be opened or written |
 | `5` | `LOCKED`: another recorded run (manual or scheduled) currently holds the run lock. A scheduled run that finds the lock held reports `busy` and exits `0` instead |
 
@@ -266,6 +280,13 @@ lock a different process has since legitimately acquired (for example, after
 this process itself was the one recovered as stale). The same symlink and
 permission checks used for `.runtime` elsewhere (`src/ledger.ts`'s
 constructor) apply here too.
+
+`acquireLock` takes an optional name. Everything above uses the default
+`morning` lock. `writes apply --execute` holds a separate
+`.runtime/writes.lock` with the same stale-recovery rules, so an executed
+write run never blocks, or is blocked by, a morning plan. A second
+concurrent `writes apply --execute` fails with `LOCKED` (exit `5`). The
+write dry run takes no lock.
 
 ## SQLite ledger location
 
@@ -347,6 +368,235 @@ backoff from 500ms); if the required delay for a given attempt exceeds that
 returned as-is. The cap applies per attempt, not as a total budget across
 both retries.
 
+## Write contract
+
+The planner above stays read-only. Notion writes exist only behind a
+separate `writes` command group (`src/writes.ts` policy, `src/outbox.ts`
+local outbox, `src/notion-writer.ts` transport, `src/write-workflow.ts`
+executor). Nothing in `plan` or `doctor` can reach that code, and no
+command writes unless an operator runs `writes apply --execute`.
+
+### Allowlisted operations
+
+Exactly four operations exist. Anything else is rejected with a `POLICY`
+error before storage is opened or the network is touched.
+
+| Operation | Record | Fields written | Confirmation |
+|---|---|---|---|
+| `target.mark_checked` | target | `lastChecked` := today's Melbourne business date | Runtime-owned: approved by policy at proposal |
+| `application.set_next_action` | application | `nextAction`, `nextActionDate` | Human, interactive terminal |
+| `application.set_stage` | application | `pipelineStage` := `Researching`, `Screen`, `Interview`, `Final`, `Offer`, or `Closed` | Human, interactive terminal |
+| `application.confirm_applied` | application | `pipelineStage` := `Applied`, plus `appliedDate` when mapped | Human, interactive terminal, plus a typed submission attestation |
+
+Field names are resolved through the existing explicit `fields` mapping in
+`targets/runtime.json`; the runtime never writes a property it was not
+told the name of.
+
+Operation preconditions (checked at proposal and again at apply):
+
+- `mark_checked` never moves a date backwards and never sets a future date.
+- `set_stage` cannot target `Applied`. The only path to `Applied` is
+  `confirm_applied`, which also requires the current stage to be
+  `Researching`.
+- `confirm_applied` dates cannot be in the future.
+- `set_next_action` requires both a non-empty action (at most 2000
+  characters, one line) and a valid date.
+- A write that would set a select to an option the data source does not
+  already have is refused with `SCHEMA`, so a write can never implicitly
+  create a new Notion select option.
+
+### Never writable
+
+- Fields: `company` (title), `watchStatus`, `careersUrl`, `roleTypes`,
+  `role`, `sourceUrl`, the frequency property, and every unmapped property.
+- Operations: creating, archiving, trashing, restoring, moving, or
+  duplicating pages; icon, cover, or content (block) changes; comments;
+  database or data source schema changes; file uploads; user lookups.
+- Anything outside the configured data source: the writer reads each page
+  first and refuses a page whose parent is not that data source.
+- Application submission, email, LinkedIn, or any other third-party
+  message. No code path exists for these, and the runtime import allowlist
+  and forbidden-SDK-call scan in `scripts/check-boundaries.mjs` keep it that
+  way.
+
+`src/notion-writer.ts`'s `writeFetch` enforces this at the transport,
+independent of the policy code: it permits only
+`GET /v1/data_sources/<configured id>`, `GET /v1/pages/<uuid>`, and
+`PATCH /v1/pages/<uuid>` whose JSON body has exactly one key, `properties`,
+naming only mapped writable properties. Every other host, path, method,
+body key (`archived`, `in_trash`, `icon`, `cover`, ...), property name,
+query string, or redirect is blocked with `POLICY` before it leaves the
+process.
+
+### Human confirmation
+
+- Runtime-owned operations (`mark_checked`) receive a `policy` approval
+  record when proposed. They still only reach Notion through
+  `writes apply --execute`.
+- Human-tier operations stay `awaiting_approval` until `writes approve`
+  records a `human_tty` approval. `approve` refuses to run unless both
+  stdin and stdout are an interactive terminal, so a scheduler, CI job,
+  pipe, or coding agent cannot approve. The operator must type the intent's
+  8-character confirmation code shown on screen.
+- `confirm_applied` additionally requires the `--confirm-submitted` flag and
+  typing `SUBMITTED`, recorded as a `submitted` attestation. Without it the
+  approval is refused, and the executor re-checks the attestation
+  immediately before sending. This is the only way the runtime can set
+  `Applied`, and it records a human statement that the application was
+  already submitted by hand; the runtime never submits anything.
+- An approval binds to the intent's idempotency key. Intents are immutable
+  after proposal, so an approved payload cannot change.
+- `writes reject <id>` closes an intent without writing.
+
+The terminal check stops accidental automation; it is not a defense
+against someone deliberately faking a terminal on the operator's own Mac.
+
+### Idempotency, duplicates, and retries
+
+- Every intent has an idempotency key: SHA-256 of the canonical
+  `{operation, source, record id, desired values, expected values}`. The
+  outbox enforces it with a `UNIQUE` constraint, so proposing the same
+  change twice returns the existing intent and records a `duplicate`
+  event instead of a second row.
+- Every write is a property *set*; no operation creates, appends, or
+  increments, so a replayed request cannot create a duplicate record.
+- Before every send, the executor re-reads the page and compares the
+  intent's fields:
+  - already equal to the desired values: marked `applied` as
+    `reconciled`, no request sent (covers a crash after a successful send,
+    a timeout whose request actually landed, and a replayed `apply`);
+  - equal to the expected values captured at proposal: sent;
+  - anything else: `conflict`, nothing sent. A human edit made in Notion
+    after the proposal always wins. Re-propose to write over it.
+- `apply --execute` holds `.runtime/writes.lock` (see "Concurrency and the
+  run lock"), so two executed runs never overlap. Inside a run, each intent
+  is also claimed (`in_flight`) in its own transaction before the request.
+  A claim younger than ten minutes is skipped; an older one is treated as
+  abandoned by a crashed run and resumed with the read-back above.
+- Transient failures (`NOTION`) return the intent to `approved` with an
+  attempt count; the third failed attempt makes it `failed`. `AUTH`,
+  `POLICY`, and `SCHEMA` failures are terminal immediately. The transport
+  retries at most twice per request, the same bounded policy as reads.
+
+Residual risk: Notion has no conditional update, so a human edit landing
+in the milliseconds between the read-back and the `PATCH` can still be
+overwritten. The window is one request long, and the post-write
+verification below still reports what was written.
+
+### Audit events
+
+`.runtime/writes.sqlite` (same private directory and file protections as
+the run ledger, mode `0700`/`0600`, no symlinks or hard links) holds:
+
+- `intents`: one row per idempotency key with operation, record id, source
+  key, desired and expected values, state, attempts, and last safe error
+  code. The values are private business data, like `runs.plan_json`.
+- `approvals`: one row per approved intent with method (`policy` or
+  `human_tty`), attestation (`submitted` or none), and timestamp.
+- `write_events`: append-only, one row per `proposed`, `duplicate`,
+  `approved`, `rejected`, `claimed`, `sent`, `applied`, `reconciled`,
+  `conflict`, `retry`, or `failed` transition, with intent id, timestamp,
+  and safe error code, plus a `pruned` row (intent id `*`) each time
+  retention deletes events. It never stores field values, tokens, page
+  titles, or raw provider errors.
+
+Intents carry a source key (hash of the planning config, the same fields as
+the run key, so editing the `schedule` block does not orphan them). So
+fictional `--demo` proposals can never be applied against the live data
+source.
+
+#### Outbox retention
+
+Same split as the run ledger (see "Retention"): rows that hold field values
+go sooner than value-free audit rows.
+
+- Finished intents (`applied`, `rejected`, `conflict`, `failed`) and their
+  approvals are deleted 90 days after their last update. Intents that are
+  awaiting approval, approved, or in flight are never deleted.
+- `write_events` rows are deleted after 180 days.
+- Pruning runs at the start of every `writes apply --execute`, under the
+  writes lock, in one transaction. Dry runs and `status` never prune.
+- Deletes remain blocked by triggers except for retention: an approval can
+  be deleted only after its intent is gone, and an event only once it is
+  180 days older than the newest event. Updates to approvals and events are
+  always blocked.
+
+### Failures, rollback, and dry-run
+
+- `writes apply` is a dry run unless `--execute` is given. The dry run
+  lists which intents would be sent and which properties they touch, then
+  exits without reading the write credential, contacting Notion, taking a
+  lock, or creating or changing any local file. It opens
+  `.runtime/writes.sqlite` with `readOnly: true`; if the outbox (or
+  `.runtime` itself) does not exist yet, it reports no intents and creates
+  nothing. A regression test starts from an empty directory and checks that
+  it is still empty afterwards.
+- Each `PATCH` is one atomic Notion request containing every property for
+  that intent, so a single intent cannot half-apply (for example,
+  `Applied` without its date).
+- After a `PATCH`, the executor parses the returned page and verifies every
+  written field. An unverified response is recorded as a failure, never as
+  `applied`.
+- Intents in one run are independent: a failure in one is recorded and the
+  rest continue. `apply` exits `0` only when nothing failed or conflicted,
+  `3` if any intent failed, conflicted, or is waiting to retry, `4` on a
+  local storage failure, and `5` (`LOCKED`) if another executed run holds
+  the writes lock.
+- There is no automatic remote rollback. A compensating write would itself
+  be an unapproved write. Instead, local state never claims success before
+  Notion confirms it; if the local record fails after a successful remote
+  write, the intent stays `in_flight`; once its ten-minute claim expires,
+  the next `apply` reconciles it by read-back without sending again.
+
+### Credential isolation
+
+- Writes use a second, dedicated Notion integration whose token is read
+  from `NOTION_WRITE_TOKEN`, only inside `writes apply --execute`. Give it
+  read content and update content capabilities, no insert content, no
+  comment capabilities, and share it only with the Target Companies data
+  source. `NOTION_TOKEN` stays a read-only integration.
+- `NOTION_WRITE_TOKEN` is an environment variable only. It is deliberately
+  not stored in the Keychain: writes are always run by hand, and nothing
+  unattended should be able to reach a write credential.
+- `apply --execute` refuses to run if `NOTION_WRITE_TOKEN` is missing, or
+  identical to `NOTION_TOKEN` or to the Keychain read token that scheduled
+  runs use (`job-hunt-os.notion` / `NOTION_TOKEN`), so one credential cannot
+  silently serve both roles. A missing or locked Keychain item is not an
+  error for this comparison.
+
+### Writes are manual only
+
+- The scheduler never writes. `schedule run` executes only the read-only
+  morning plan, and `scripts/check-boundaries.mjs` fails if
+  `src/scheduler.ts` reaches `src/writes.ts`, `src/outbox.ts`,
+  `src/notion-writer.ts`, or `src/write-workflow.ts` through any chain of
+  imports.
+- Scheduled runs have no environment variables, so they could not read
+  `NOTION_WRITE_TOKEN` even if a path existed.
+- Approval needs an interactive terminal; `apply --execute` needs the
+  operator's exported write token.
+- The token is never accepted as a command argument or config value, and
+  never written to SQLite, stdout, stderr, or a handoff. The Notion client
+  runs with its logger disabled, and every error leaves through
+  `safeError`, which withholds provider text.
+
+### Write commands
+
+```bash
+npm run writes -- propose <operation> --id <record id> [--date YYYY-MM-DD] [--action <text>] [--stage <stage>] [--demo | --config <path>] [--json]
+npm run writes -- approve <intent id> [--confirm-submitted]
+npm run writes -- reject <intent id>
+npm run writes -- apply [--dry-run | --execute] [--demo | --config <path>] [--json]
+npm run writes -- status [--json]
+```
+
+`propose` reads the current record through the normal read-only source to
+capture expected values, so it needs `NOTION_TOKEN` (or `--demo`) but never
+the write token. `status` lists intents with operation, record id, state,
+and field names only. Like the dry run and the top-level `status`, it opens
+the outbox read-only and creates nothing when none exists. Only `propose`,
+`approve`, `reject`, and `apply --execute` open the outbox for writing.
+
 ## Privacy boundary
 
 `scripts/check-boundaries.mjs` (`npm run privacy:check`, chained into
@@ -354,7 +604,9 @@ both retries.
 
 - **Runtime imports**: `src/**/*.ts` may only import `node:crypto`,
   `node:fs`, `node:fs/promises`, `node:path`, `node:url`, `node:util`,
-  `node:sqlite`, `@notionhq/client`, `zod`, or a relative module. No dynamic
+  `node:sqlite`, `node:readline/promises` (the interactive approval
+  prompt), `@notionhq/client`, `zod`, or a relative module. No HTTP,
+  socket, mail, or child-process module is importable. No dynamic
   `require`, `eval`, `Function`, or dynamic `import()` is permitted anywhere
   it scans.
 - **One subprocess, one binary**: `node:child_process` is rejected
@@ -362,12 +614,19 @@ both retries.
   named, unaliased `execFileSync` import whose every call passes the
   literal `/usr/bin/security` as the program. A shell, `claude`, `codex`, or
   any other binary fails the check.
+- **Forbidden Notion SDK operations**: `src/**/*.ts` may not reference
+  `pages.create`, `pages.move`, `pages.properties`, `dataSources.create`,
+  `dataSources.update`, or a client's `blocks`, `comments`, `databases`,
+  `fileUploads`, `users`, `oauth`, or `views` surfaces. The write path uses
+  only `pages.retrieve`, `pages.update`, and `dataSources.retrieve`.
+- **Manual-only writes**: `src/scheduler.ts` may not reach any write module
+  through any chain of relative imports (`checkWriteIsolation`).
 - **Publishable file set**: nothing under `profile/`, `pipeline/`, `prep/`,
   `targets/`, `.runtime/`, `.public/`, `node_modules/`, or `dist/`, and not
   `dashboard/data.local.json` or any `.env*` file, may appear in the
   tracked-or-untracked file set `git ls-files` reports.
-- **Gitignore coverage**: the private directories and files above must
-  actually be git-ignored, checked with `git check-ignore`.
+- **Gitignore coverage**: the private directories and files above
+  (including `.runtime/writes.sqlite`) must actually be git-ignored, checked with `git check-ignore`.
 - **Dependency allowlist**: `package.json`'s `dependencies` may only be
   `zod` and `@notionhq/client`.
 - **Credential scanning**: every tracked or publishable `.ts`, `.mjs`,
@@ -590,3 +849,7 @@ discovery store.
 | `doctor` reports `runtimeDir` or `gitignore` as failed | `.runtime` is a symlink or has unexpected permissions, or `.gitignore` is missing an entry for a private path | Fix `.runtime`'s permissions/symlink status directly; add the missing line(s) to `.gitignore` |
 | `doctor` reports `node` as failed | The running Node version does not meet `package.json`'s `engines.node` | Switch to a Node version matching `.nvmrc` (currently `24`) |
 | `status` reports `stale` | The workflow has not completed a run for today's Melbourne business date yet, whether or not a previous day's run succeeded | Run `npm run morning:plan`; `stale` on its own is not a failure, just "hasn't happened yet today" |
+| `writes approve` fails with "interactive terminal" | Run from a scheduler, pipe, CI, or coding agent | Run it yourself in a terminal; this is intentional |
+| `writes apply --execute` fails with `AUTH` naming `NOTION_WRITE_TOKEN` | Write token unset, identical to `NOTION_TOKEN`, or its integration is not shared with the data source | Create a separate write integration (read and update content only), share it with the data source, export `NOTION_WRITE_TOKEN` |
+| An intent ends in `conflict` | Someone changed the field in Notion after it was proposed | Nothing to fix: the human edit was kept. Re-propose if the write is still wanted |
+| `SCHEMA` error "never create select options" | The stage is not an existing option in the Notion select | Add the option in Notion by hand, or choose an existing stage |

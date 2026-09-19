@@ -52,13 +52,16 @@ function isStale(lock: LockFile): boolean {
   }
 }
 
-// A process-wide single-instance lock for the complete morning-plan workflow,
-// including the remote read. Two overlapping invocations must not both reach
-// the ledger or the Notion API at once. Recovers automatically from a lock
-// left behind by a process that is no longer running.
-export function acquireLock(root: string): Lock {
+// A process-wide single-instance lock for one workflow, including its remote
+// calls. The default "morning" lock covers the morning-plan workflow; writes
+// use their own "writes" lock so a write run never blocks a plan. Two
+// overlapping invocations of the same workflow must not both reach local
+// state or the Notion API at once. Recovers automatically from a lock left
+// behind by a process that is no longer running.
+export function acquireLock(root: string, name: "morning" | "writes" = "morning"): Lock {
   const directory = ensureRuntimeDir(root);
-  const path = join(directory, "morning.lock");
+  const path = join(directory, `${name}.lock`);
+  const label = name === "morning" ? "morning-plan" : name;
   const token = randomUUID();
   const tryWrite = (): boolean => {
     try {
@@ -82,7 +85,7 @@ export function acquireLock(root: string): Lock {
       try { unlinkSync(path); } catch { /* already recovered */ }
     }
     if (!tryWrite()) {
-      throw new AppError("LOCKED", "Another morning-plan run holds the lock. Wait for it to finish, or check for a stuck process holding .runtime/morning.lock.");
+      throw new AppError("LOCKED", `Another ${label} run holds the lock. Wait for it to finish, or check for a stuck process holding .runtime/${name}.lock.`);
     }
   }
   return {
