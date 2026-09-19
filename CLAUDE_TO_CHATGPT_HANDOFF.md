@@ -1,6 +1,105 @@
 # Claude to ChatGPT Handoff
 
-## Latest: Slice 2.2, macOS scheduling and recovery (branch `feature/slice-2.2-scheduler`)
+## Current slice: Slice 4, safe writes (branch `feature/slice-4-safe-writes`, PR #11)
+
+### Status
+
+Rebased onto `origin/master` after Slices 2.0, 2.1, 2.2, and 3.0 merged, and
+connected to them (retention, a named lock, manual-only enforcement against
+the scheduler, the Keychain token comparison, and `status` counts). The
+earlier "no scheduler or discovery on master" deviation no longer applies.
+
+### What was implemented
+
+- Write contract in `docs/runtime.md` ("Write contract"): allowlisted
+  operations and fields, never-writable fields and operations, confirmation
+  tiers, idempotency and retries, audit events, retention, failure handling,
+  dry run, credential isolation, and manual-only enforcement.
+- Four allowlisted operations: `target.mark_checked` (runtime-owned),
+  `application.set_next_action`, `application.set_stage` (human-approved;
+  cannot target `Applied`), and `application.confirm_applied` (human-approved
+  plus a typed `SUBMITTED` attestation; the only path to `Applied`).
+- Human approval only from an interactive terminal, with a typed per-intent
+  confirmation code. Schedulers, pipes, CI, and coding agents are refused
+  before storage is opened.
+- Private outbox `.runtime/writes.sqlite` (schema v2): `UNIQUE` idempotency
+  key, immutable approvals, value-free append-only `write_events`. Deletes
+  are allowed only by retention (finished intents and approvals after 90
+  days, events after 180, open intents never), enforced by triggers.
+- Executor that reads back before every send (reconcile, conflict, or
+  write), verifies the response, retries at most three times, and isolates
+  failures per intent. `apply --execute` holds its own `.runtime/writes.lock`
+  (Slice 2.1's lock, now with an optional name) and prunes at start.
+- Separate write transport: only `GET` data source, `GET` page, and `PATCH`
+  page whose body is exactly `{properties}` with mapped writable names.
+  Refuses foreign or trashed pages and select values that would create a
+  new option.
+- `NOTION_WRITE_TOKEN` from the environment only (Simmy's choice: not in the
+  Keychain). Refused if it matches `NOTION_TOKEN` or the Keychain read token.
+- `status` gains a `writes` field: intent counts by state for the current
+  config, read-only, `null` before any proposal.
+- Boundary checks: forbidden Notion SDK surfaces, and `src/scheduler.ts` may
+  not reach any write module through any import chain.
+
+### Files changed
+
+- New: `src/writes.ts`, `src/outbox.ts`, `src/notion-writer.ts`,
+  `src/write-workflow.ts`, `src/storage.ts`, `tests/writes.test.ts`,
+  `tests/notion-writer.test.ts`.
+- Changed: `src/cli.ts` (`writes` group in master's per-subcommand option
+  style, `status` counts), `src/lock.ts` (optional lock name, default
+  unchanged), `src/credentials.ts` (`tryReadKeychainToken` for comparison
+  only), `src/notion.ts` (shared bounded retry, exported property readers),
+  `scripts/check-boundaries.mjs`, `tests/cli.test.ts`,
+  `tests/privacy.test.ts`, `package.json` (`writes` script),
+  `docs/runtime.md`, `README.md`, this file.
+- Not changed: `src/ledger.ts` and `src/discoveryStore.ts` stay exactly as
+  on master. `src/storage.ts` is used only by the outbox.
+
+### Important decisions
+
+- No automatic remote rollback: a compensating write would itself be
+  unapproved. Uncertain outcomes are resolved by read-back.
+- Intent scope uses `planningConfig`, like the run key, so editing the
+  `schedule` block never orphans intents; demo intents never reach live
+  Notion.
+- Retention deletes are allowed by narrow triggers rather than dropping the
+  triggers. Pruning appends a value-free `pruned` event first, because the
+  event trigger measures age from the newest event.
+- Complication found by tests: `node:sqlite` enforces foreign keys, so
+  pruning defers the foreign-key check to commit
+  (`PRAGMA defer_foreign_keys`) to delete an intent before its approval.
+- Residual risks (documented): the terminal check stops accidental
+  automation, not a deliberately faked terminal; Notion has no conditional
+  update, so a one-request race remains between read-back and `PATCH`.
+
+### Tests run
+
+| Check | Result |
+|---|---|
+| `npm run check` (typecheck, lint, tests, privacy) | Pass, 219/219 |
+| `npm run build:public` | Pass, only `index.html` and `data.json` |
+| `git diff --check` | Pass |
+| Manual `--demo` CLI run | propose, duplicate, status counts, dry run, refusals as documented |
+| Live Notion write | Not run: no `NOTION_WRITE_TOKEN` yet, and a live write needs Simmy's go-ahead |
+
+### Not implemented
+
+- Stable external listing identity linked to Notion rows, and Markdown or
+  dashboard projections. Slice 3.0 has no live provider yet, and linking a
+  listing to a new application row would need page creation, which the
+  policy forbids. Revisit after Slice 3.1.
+
+### Recommended next action
+
+Simmy reviews PR #11. Before live use: create a separate Notion write
+integration (read and update content only), share it with the Target
+Companies data source, export `NOTION_WRITE_TOKEN`, and run one
+`target.mark_checked` end to end on a single row.
+
+---
+
+## Previous: Slice 2.2, macOS scheduling and recovery (branch `feature/slice-2.2-scheduler`)
 
 ### What was implemented
 

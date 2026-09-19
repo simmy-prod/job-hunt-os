@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Job search workspace with a deterministic read-only morning planner and local dashboard.",
+  "description": "Job search workspace with a deterministic morning planner, allowlisted human-confirmed Notion writes, and local dashboard.",
   "scripts": {
     "build": "node scripts/build-dashboard.mjs",
     "serve": "node scripts/serve-dashboard.mjs",
@@ -16,6 +16,7 @@
     "morning:plan": "npm run compile --silent && node dist/src/cli.js plan",
     "doctor": "npm run compile --silent && node dist/src/cli.js doctor",
     "schedule": "npm run compile --silent && node dist/src/cli.js schedule",
+    "writes": "npm run compile --silent && node dist/src/cli.js writes",
     "privacy:check": "node scripts/check-boundaries.mjs",
     "build:public": "node scripts/build-public.mjs"
   },

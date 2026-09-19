@@ -7,7 +7,7 @@ import ts from "typescript";
 
 const allowedImports = new Set([
   "node:crypto", "node:fs", "node:fs/promises", "node:path", "node:url", "node:util", "node:sqlite",
-  "@notionhq/client", "zod",
+  "node:readline/promises", "@notionhq/client", "zod",
 ]);
 // The runtime may start exactly one subprocess: the read-only macOS Keychain
 // lookup in src/credentials.ts. Anything else (a shell, claude, codex) is rejected.
@@ -19,6 +19,11 @@ function isKeychainImport(node, filename) {
     bindings !== undefined && ts.isNamedImports(bindings) && bindings.elements.length === 1 &&
     bindings.elements[0].name.text === "execFileSync" && !bindings.elements[0].propertyName;
 }
+// Notion SDK surfaces the write contract never uses: page creation or moves,
+// content blocks, comments, database or data source changes, uploads, users.
+const forbiddenSdkMembers = new Set(["blocks", "comments", "databases", "fileUploads", "users", "oauth", "views"]);
+const forbiddenPageMembers = new Set(["create", "move", "properties"]);
+const forbiddenDataSourceMembers = new Set(["create", "update"]);
 export function checkRuntimeSource(source, filename) {
   const errors = [];
   const ast = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true);
@@ -46,6 +51,14 @@ export function checkRuntimeSource(source, filename) {
         errors.push(`Dynamic execution or import in ${filename}`);
       }
     }
+    if (ts.isPropertyAccessExpression(node)) {
+      const member = node.name.text;
+      const owner = ts.isPropertyAccessExpression(node.expression) ? node.expression.name.text : null;
+      if ((forbiddenSdkMembers.has(member) && /client$/i.test(node.expression.getText())) ||
+        (owner === "pages" && forbiddenPageMembers.has(member)) || (owner === "dataSources" && forbiddenDataSourceMembers.has(member))) {
+        errors.push(`Forbidden Notion SDK operation in ${filename}`);
+      }
+    }
     if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "Function") {
       errors.push(`Dynamic execution in ${filename}`);
     }
@@ -53,6 +66,26 @@ export function checkRuntimeSource(source, filename) {
   }
   visit(ast);
   return errors;
+}
+
+// Writes are manual only. The unattended entry point may not reach any write
+// module, directly or through another module. Files are keyed like "src/x.ts".
+const writeModules = new Set(["src/writes.ts", "src/outbox.ts", "src/notion-writer.ts", "src/write-workflow.ts"]);
+export function checkWriteIsolation(sources, entry = "src/scheduler.ts") {
+  const seen = new Set([entry]);
+  const queue = [entry];
+  while (queue.length) {
+    const file = queue.shift();
+    const ast = ts.createSourceFile(file, sources.get(file) ?? "", ts.ScriptTarget.Latest, true);
+    for (const node of ast.statements) {
+      const specifier = (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) ? node.moduleSpecifier : undefined;
+      if (!specifier || !ts.isStringLiteral(specifier) || !specifier.text.startsWith("./")) continue;
+      const target = `src/${specifier.text.slice(2).replace(/\.js$/, ".ts")}`;
+      if (writeModules.has(target)) return [`${entry} reaches write module ${target} through ${file}. Writes must stay manual.`];
+      if (!seen.has(target)) { seen.add(target); queue.push(target); }
+    }
+  }
+  return [];
 }
 
 export function checkPublicSample(root) {
@@ -76,7 +109,7 @@ export function checkBoundaries(root) {
     if (/^(profile|pipeline|prep|targets|\.runtime|\.public|node_modules|dist)\//.test(file) ||
       file === "dashboard/data.local.json" || /^\.env(?:\.|$)/.test(file)) errors.push(`Private or generated file in publishable set: ${file}`);
   }
-  const ignored = ["profile/privacy-check", "pipeline/privacy-check", "prep/privacy-check", "targets/privacy-check", ".runtime/runs.sqlite", ".env", "dashboard/data.local.json"];
+  const ignored = ["profile/privacy-check", "pipeline/privacy-check", "prep/privacy-check", "targets/privacy-check", ".runtime/runs.sqlite", ".runtime/writes.sqlite", ".env", "dashboard/data.local.json"];
   for (const file of ignored) {
     try { execFileSync("git", ["check-ignore", "-q", file], {cwd: root}); }
     catch { errors.push(`Missing private ignore rule: ${file}`); }
@@ -85,14 +118,20 @@ export function checkBoundaries(root) {
   if (Object.keys(packageJson.dependencies ?? {}).some((name) => !["zod", "@notionhq/client"].includes(name))) {
     errors.push("Unreviewed production dependency. The runtime permits only the Notion SDK and Zod.");
   }
+  const sources = new Map();
   function walk(path) {
     for (const entry of readdirSync(path, {withFileTypes: true})) {
       const full = join(path, entry.name);
       if (entry.isDirectory()) walk(full);
-      else if (entry.name.endsWith(".ts")) errors.push(...checkRuntimeSource(readFileSync(full, "utf8"), relative(root, full)));
+      else if (entry.name.endsWith(".ts")) {
+        const source = readFileSync(full, "utf8");
+        sources.set(relative(root, full), source);
+        errors.push(...checkRuntimeSource(source, relative(root, full)));
+      }
     }
   }
   walk(join(root, "src"));
+  errors.push(...checkWriteIsolation(sources));
   // Scan code/docs intended for publication, never the ignored private layer.
   for (const file of files.filter((name) => /\.(?:ts|mjs|json|md|yml)$/.test(name) && !/^\.claude\/worktrees\//.test(name))) {
     let content;

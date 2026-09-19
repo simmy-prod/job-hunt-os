@@ -20,22 +20,15 @@ const querySchema = z.object({
   request_status: z.object({type: z.string()}).optional(),
 });
 
-type FetchInit = {method?: string; headers?: Record<string, string>; body?: string | FormData};
-type Fetch = (url: string, init: RequestInit) => Promise<Response>;
-type Wait = (milliseconds: number) => Promise<void>;
+export type FetchInit = {method?: string; headers?: Record<string, string>; body?: string | FormData};
+export type Fetch = (url: string, init: RequestInit) => Promise<Response>;
+export type Wait = (milliseconds: number) => Promise<void>;
 
-// Both allowed operations are reads, although Notion uses POST for queries.
-// No other host, data source, path, method, or redirect can receive the token.
-export function readOnlyFetch(dataSourceId: string, network: Fetch = fetch,
+// Bounded retry shared by the read and write transports. Writes are property
+// sets, so resending one after a transient failure cannot duplicate anything.
+export function boundedFetch(network: Fetch = fetch,
   wait: Wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))) {
-  return async (input: string, init: FetchInit = {}): Promise<Response> => {
-    const url = new URL(input);
-    const base = `/v1/data_sources/${dataSourceId}`;
-    const method = (init.method ?? "GET").toUpperCase();
-    if (url.origin !== "https://api.notion.com" || url.username || url.password || url.search || url.hash ||
-      !((url.pathname === base && method === "GET") || (url.pathname === `${base}/query` && method === "POST"))) {
-      throw new AppError("POLICY", "The read-only Notion transport blocked an unsupported request.");
-    }
+  return async (input: string, init: FetchInit): Promise<Response> => {
     for (let attempt = 0; ; attempt++) {
       const response = await network(input, {...init, redirect: "error", signal: AbortSignal.timeout(15_000)});
       if (![429, 500, 502, 503, 504, 529].includes(response.status) || attempt >= 2) return response;
@@ -48,6 +41,23 @@ export function readOnlyFetch(dataSourceId: string, network: Fetch = fetch,
       await response.body?.cancel();
       await wait(Math.max(0, delay));
     }
+  };
+}
+
+// Both allowed operations are reads, although Notion uses POST for queries.
+// No other host, data source, path, method, or redirect can receive the token.
+export function readOnlyFetch(dataSourceId: string, network: Fetch = fetch,
+  wait: Wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))) {
+  const send = boundedFetch(network, wait);
+  return async (input: string, init: FetchInit = {}): Promise<Response> => {
+    const url = new URL(input);
+    const base = `/v1/data_sources/${dataSourceId}`;
+    const method = (init.method ?? "GET").toUpperCase();
+    if (url.origin !== "https://api.notion.com" || url.username || url.password || url.search || url.hash ||
+      !((url.pathname === base && method === "GET") || (url.pathname === `${base}/query` && method === "POST"))) {
+      throw new AppError("POLICY", "The read-only Notion transport blocked an unsupported request.");
+    }
+    return send(input, init);
   };
 }
 
@@ -94,21 +104,21 @@ export function validateNotionSchema(raw: unknown, config: NotionConfig): void {
   if (issues.length) throw new AppError("SCHEMA", `Notion schema drift. ${issues.join("; ")}. Update the explicit field mapping or review the migration in docs/runtime.md. No schema changes were made.`);
 }
 
-function property(properties: Record<string, unknown>, name: string, type: string): unknown {
+export function property(properties: Record<string, unknown>, name: string, type: string): unknown {
   const schema = z.object({type: z.literal(type), [type]: z.unknown()});
   const value = validate(schema, properties[name], `Notion property ${name}`);
   if (!(type in value)) throw new AppError("SCHEMA", `Notion property ${name} has no value payload.`);
   return value[type];
 }
 const richTextSchema = z.array(z.object({plain_text: z.string()}));
-function readText(properties: Record<string, unknown>, name: string, type = "rich_text"): string | null {
+export function readText(properties: Record<string, unknown>, name: string, type = "rich_text"): string | null {
   return validate(richTextSchema, property(properties, name, type), `Notion property ${name}`)
     .map((item) => item.plain_text).join("").trim() || null;
 }
-function readSelect(properties: Record<string, unknown>, name: string): string | null {
+export function readSelect(properties: Record<string, unknown>, name: string): string | null {
   return validate(z.object({name: z.string()}).nullable(), property(properties, name, "select"), `Notion property ${name}`)?.name ?? null;
 }
-function readDate(properties: Record<string, unknown>, name: string): string | null {
+export function readDate(properties: Record<string, unknown>, name: string): string | null {
   // A datetime/range needs an explicit policy. Do not silently discard its time/end.
   return validate(z.object({start: z.iso.date(), end: z.null().optional()}).nullable(),
     property(properties, name, "date"), `Notion property ${name}`)?.start ?? null;
