@@ -41,6 +41,19 @@ for (const source of [
 ]) test(`runtime boundary rejects ${source}`, () => {
   assert.ok(checkRuntimeSource(source, "src/example.ts").length > 0);
 });
+test("only the credentials module may start a subprocess, and only the Keychain lookup", () => {
+  const keychain = 'import { execFileSync } from "node:child_process"; execFileSync("/usr/bin/security", ["find-generic-password"]);';
+  assert.deepEqual(checkRuntimeSource(readFileSync(join(root, "src/credentials.ts"), "utf8"), "src/credentials.ts"), []);
+  assert.deepEqual(checkRuntimeSource(keychain, "src/credentials.ts"), []);
+  for (const [source, filename] of [
+    [keychain, "src/scheduler.ts"],
+    ['import { execFileSync } from "node:child_process"; execFileSync("/bin/sh", ["-c", "claude"]);', "src/credentials.ts"],
+    ['import { execFileSync } from "node:child_process"; const run = execFileSync; run("/usr/local/bin/codex");', "src/credentials.ts"],
+    ['import { execFileSync as run } from "node:child_process"; run("/usr/bin/security");', "src/credentials.ts"],
+    ['import { spawn } from "node:child_process";', "src/credentials.ts"],
+    ['import * as child from "node:child_process";', "src/credentials.ts"],
+  ]) assert.ok(checkRuntimeSource(source!, filename!).length > 0, source);
+});
 test("runtime boundary accepts the approved direct Notion SDK", () => {
   assert.deepEqual(checkRuntimeSource('import { Client } from "@notionhq/client";', "src/notion.ts"), []);
 });

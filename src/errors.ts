@@ -1,4 +1,4 @@
-export type ErrorCode = "CONFIG" | "SCHEMA" | "AUTH" | "NOTION" | "INPUT" | "STORAGE" | "POLICY";
+export type ErrorCode = "CONFIG" | "SCHEMA" | "AUTH" | "NOTION" | "INPUT" | "STORAGE" | "POLICY" | "LOCKED";
 
 export class AppError extends Error {
   constructor(public readonly code: ErrorCode, message: string) {

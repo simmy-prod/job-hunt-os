@@ -1,7 +1,8 @@
 # Deterministic runtime
 
 This document describes the read-only morning planner runtime under `src/`,
-run through `npm run morning:plan` and `npm run doctor`. It is separate from
+run through `npm run morning:plan`, `npm run doctor`, and (unattended, on
+macOS) `npm run schedule`. It is separate from
 the user-invoked Claude Code skills in `.claude/skills` (`job-scan`,
 `interviewer-recon`, `company-deep-dive`, `interview-drill`,
 `profile-interview`) and the `/morning-hunt` command that sequences them.
@@ -29,6 +30,9 @@ core differently:
 - `doctor` reads the source and calls `planMorning` directly. It never goes
   through `runMorning` and never touches the ledger, by design: doctor is a
   read-only diagnostic and must not create or update a run record.
+- `schedule run` calls `src/scheduler.ts`'s `runScheduled`, which decides
+  whether today's plan still needs to run and, if so, goes through the same
+  read, plan, and record path as `morning:plan` (see "Scheduling" below).
 
 ## Node requirement
 
@@ -124,9 +128,19 @@ npm run doctor -- [--demo | --config targets/runtime.json] [--json]
   resolving that (so no accepted flag is silently ignored) is scoped to the
   next implementation slice, not this runtime baseline.
 
-Both commands are read-only with respect to Notion and to any job board:
-neither scans job listings, writes to Notion, submits an application, sends
-a message, or installs a scheduler.
+```bash
+npm run schedule -- <run | status | preview | install | uninstall> [--config targets/runtime.json]
+```
+
+`schedule run` accepts `--json` and `--at`; `schedule status` accepts
+`--json` and `--at`; `preview` and `install` accept only `--config`;
+`uninstall` accepts nothing. Any other option is rejected rather than
+ignored. See "Scheduling" below.
+
+Every command is read-only with respect to Notion and to any job board:
+none scans job listings, writes to Notion, submits an application, or sends
+a message. `schedule install` and `schedule uninstall` write or remove one
+local LaunchAgent file and nothing else.
 
 ## Exit behavior
 
@@ -138,6 +152,7 @@ a message, or installs a scheduler.
 | `2` | Default: `CONFIG`, `SCHEMA`, `AUTH`, `INPUT`, or `POLICY` failure |
 | `3` | `NOTION`: a Notion-side read or pagination failure |
 | `4` | `STORAGE`: the local SQLite ledger could not be opened or written |
+| `5` | `LOCKED`: another recorded run holds the run lease (manual `morning:plan` only; a scheduled run reports `busy` and exits `0`) |
 
 On any failure, the process prints a single JSON line (`{"error": <code>,
 "message": <safe message>}`) to stderr. Raw provider errors, stack traces,
@@ -147,7 +162,7 @@ deliberate `AppError` into a generic, non-leaking message.
 
 ## SQLite ledger location
 
-Every recorded run (unless `--no-record` is passed) writes to
+Every recorded run (unless `--no-record` is passed), manual or scheduled, writes to
 `.runtime/runs.sqlite`, created relative to the repository root the first
 time the runtime runs. `.runtime/` is gitignored and never published.
 `src/ledger.ts` creates the directory at mode `0700` and the database file
@@ -165,8 +180,15 @@ private:
   intentional; it's what makes a recorded run auditable. A failure record
   stores no `plan_json`/`digest`, only the `AppError` code.
 - `events` is append-only and holds only `logical_key`, `observed_at`,
-  `outcome`, and `error_code` per run, never the plan or digest content.
-  This table is the redacted one.
+  `outcome`, `error_code`, and `invoker` (`manual` or `scheduled`) per run,
+  never the plan or digest content. This table is the redacted one.
+- `leases` holds at most one row: the single-run lease (owner id, PID,
+  acquisition time). It never holds business data.
+
+The ledger schema is version 2 (`PRAGMA user_version`). A version 1 ledger
+from before scheduling is migrated in place on first open: `invoker` is
+added to `events` and existing rows are marked `manual`, and `leases` is
+created. Older runtime code refuses a version 2 ledger rather than guessing.
 
 Neither table ever stores `NOTION_TOKEN`, other credentials, or raw
 provider error text. But `.runtime/runs.sqlite` as a whole is private
@@ -204,6 +226,11 @@ both retries.
   `node:sqlite`, `@notionhq/client`, `zod`, or a relative module. No dynamic
   `require`, `eval`, `Function`, or dynamic `import()` is permitted anywhere
   it scans.
+- **One subprocess, one binary**: `node:child_process` is rejected
+  everywhere in `src/` except `src/credentials.ts`, and there only as a
+  named, unaliased `execFileSync` import whose every call passes the
+  literal `/usr/bin/security` as the program. A shell, `claude`, `codex`, or
+  any other binary fails the check.
 - **Publishable file set**: nothing under `profile/`, `pipeline/`, `prep/`,
   `targets/`, `.runtime/`, `.public/`, `node_modules/`, or `dist/`, and not
   `dashboard/data.local.json` or any `.env*` file, may appear in the
@@ -227,6 +254,73 @@ the public-sample check and then copies only `dashboard/index.html` and
 path is a symlink or has more than one hard link, and refuses if `.public/`
 already contains an unexpected file.
 
+## Scheduling (macOS LaunchAgent)
+
+The scheduler runs the same deterministic planner unattended on the user's
+Mac. launchd starts `node dist/src/cli.js schedule run` directly: no shell,
+no shell startup files, no Claude Code, Codex, MCP, or model call. It never
+writes to Notion, never touches a job board, and never submits or sends
+anything.
+
+### Operational contract
+
+| Topic | Contract |
+|---|---|
+| Owner | One per-user LaunchAgent, label `local.job-hunt-os.morning-plan`, at `~/Library/LaunchAgents/local.job-hunt-os.morning-plan.plist`. The runtime writes and removes only that file. It never runs `launchctl`; install and uninstall print the exact command instead. |
+| Triggers | `RunAtLoad` (login, reboot, or load), `StartCalendarInterval` at `schedule.time`, and `StartInterval` every 3600 seconds. Each trigger is one `schedule run`. |
+| When a trigger does work | Only when all hold: `schedule.enabled` is `true`; the business-timezone wall clock is at or after `schedule.time`; no live run holds the lease; today's logical key has no success; and fewer than 3 scheduled attempts for today's key have failed. Otherwise it exits `0` without reading credentials or contacting Notion. |
+| Idempotency | One logical key per business day: `morning-plan:v1:<planning config hash>:<business date>`. The `schedule` block is excluded from the hash, so editing it never forks a day. After a success, every later trigger that day is a no-op. |
+| Duplicate prevention | A single-run lease in the ledger, taken with `BEGIN IMMEDIATE` before the source read and released after the result is recorded. Concurrent triggers see `busy`. |
+| Timezone | Business date and the `schedule.time` gate use `timezone` from the config (`Australia/Melbourne`), never the system timezone. launchd's calendar trigger follows the system clock, so if they differ the hourly re-check runs the plan within an hour of the configured business time. `schedule status` warns about a mismatch. |
+| DST | The gate compares wall-clock `HH:MM`. A skipped local hour runs at the first trigger after the jump; a repeated hour cannot run twice because the day's key already succeeded. |
+| Retry | Within a run: only the bounded Notion transport retries. Across runs: a failed day is retried by the next hourly or login trigger, up to 3 failed scheduled attempts per key, then scheduled runs stop for that day (`attempts_exhausted`). Manual runs are never capped. |
+| Failure visibility | Each failure is recorded in the ledger (code only), exits nonzero, and appends one redacted JSON line to `.runtime/logs/scheduler.log`. `schedule status` shows today's state and error code. |
+| Quiet success | A successful run appends one line of counts to the log. Skips (not due, already succeeded, disabled, exhausted) print nothing. |
+| Manual runs | `morning:plan` (recorded) shares the key and the lease. A manual success satisfies the day for the scheduler. A manual recorded run during an active scheduled run fails fast with `LOCKED` (exit `5`). `--no-record` and `doctor` take no lease and write nothing. |
+| Restart recovery | A lease is stale when its PID no longer exists or it is older than 30 minutes; the next run takes it over. Ledger writes are transactional, so a crash leaves either the previous state or a complete new record, never a partial success. `RunAtLoad` re-checks the day after every login. |
+| Credentials | Scheduled runs read the token from the login Keychain (generic password, service `job-hunt-os.notion`, account `NOTION_TOKEN`) through `/usr/bin/security`, only when a run is actually due. The token is held in memory only. It is never in the plist, program arguments, job environment, logs, SQLite, or docs. Manual runs keep using the `NOTION_TOKEN` environment variable with no Keychain fallback. |
+| Log | `.runtime/logs/scheduler.log`, inside the `0700` private directory, created by launchd under umask `077`. Counts, dates, and error codes only. No rotation yet; at one line per day it stays small. |
+
+### Local setup
+
+Run these from the main checkout (not a temporary worktree), because the
+plist records absolute paths to this checkout.
+
+1. Add `"schedule": {"enabled": true, "time": "08:00"}` to private
+   `targets/runtime.json`. `time` is 24-hour `HH:MM` in the config's
+   `timezone`. A config without this block is never scheduled.
+2. Store the standalone Notion token in the login Keychain. Put `-w` last
+   with no value so `security` prompts for it; the token then never appears
+   in program arguments or shell history:
+
+   ```bash
+   security add-generic-password -s job-hunt-os.notion -a NOTION_TOKEN -w
+   ```
+
+3. Preview the plist and check its paths: `npm run schedule -- preview`
+4. Install it: `npm run schedule -- install`. This compiles, writes the
+   plist, creates `.runtime/logs/`, and prints the `launchctl bootstrap`
+   command. Run that command to start now, or log out and back in.
+5. Confirm: `npm run schedule -- status`. The first time a scheduled run
+   reads the Keychain, macOS may ask whether `security` may access the item;
+   choose "Always Allow" so unattended runs work.
+
+Re-run `npm run schedule -- install` after upgrading Node or moving the
+checkout: the plist pins the absolute Node binary, and `schedule status`
+reports `installed, out of date` when it no longer matches.
+
+### Disabling safely
+
+- **Pause (kill switch):** set `"enabled": false` in `targets/runtime.json`'s
+  `schedule` block. The next trigger exits `0` before opening the ledger or
+  reading the Keychain. No launchd change is needed, and manual runs are
+  unaffected.
+- **Remove:** `npm run schedule -- uninstall` deletes only this runtime's
+  plist (it refuses a symlink or a file with another label), then prints
+  `launchctl bootout gui/<uid>/local.job-hunt-os.morning-plan` to unload the
+  running job. Optionally delete the Keychain item with
+  `security delete-generic-password -s job-hunt-os.notion -a NOTION_TOKEN`.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
@@ -237,4 +331,9 @@ already contains an unexpected file.
 | `NOTION` error mid-run | Transient Notion outage, network failure, or pagination did not advance | Retry later; this never leaves a stale successful plan for the same logical run key |
 | `STORAGE` error | `.runtime/` is missing write permission, is a symlink, or the ledger file/journal has an unexpected link count | Fix local file permissions on `.runtime/`; do not hand-edit `.runtime/runs.sqlite` |
 | `POLICY` error | The read-only transport blocked a request that did not match the one allowed GET and the one allowed POST | This indicates a code defect, not a configuration problem; do not work around it by relaxing the transport |
+| `LOCKED` (exit `5`) on `morning:plan` | A scheduled or other recorded run is in progress | Wait for it to finish and retry; use `--no-record` for a lock-free read |
+| `schedule status` shows `failed [AUTH]` | Keychain item missing, keychain locked, or `security` was denied access | Re-add the item (see "Local setup"), log in so the keychain is unlocked, and allow access when prompted |
+| `schedule status` shows `attempts_exhausted` | Three scheduled attempts failed today | Fix the cause shown by the error code, then run `npm run morning:plan` by hand; tomorrow's key starts fresh |
+| `schedule status` shows `installed, out of date` | Node was upgraded, the checkout moved, or the schedule time changed | Re-run `npm run schedule -- install` and the printed `launchctl` command |
+| Scheduled run fires at the wrong local hour | System timezone differs from the config timezone | Expected; the hourly re-check covers it. `schedule status` shows the warning |
 | CLI silently accepts `--dry-run` but nothing changes | Known gap, tracked for the next implementation slice | No workaround today; do not rely on `--dry-run` to prevent a ledger write, use `--no-record` instead |

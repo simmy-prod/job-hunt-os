@@ -120,6 +120,13 @@ surfacing, and one interview-drill rep. `npm run morning:plan` and
 `npm run doctor` run the deterministic, model-free due-date check on their
 own, without Claude Code, if you just want that part.
 
+**Run it unattended (macOS, optional):** `npm run schedule -- install`
+writes a per-user LaunchAgent that runs the same read-only planner once per
+business day, reading the Notion token from the login Keychain. It is off
+unless `schedule.enabled` is set in `targets/runtime.json`. Setup, the
+operational contract, and how to disable it are in
+[`docs/runtime.md`](docs/runtime.md#scheduling-macos-launchagent).
+
 **View your pipeline:**
 
 ```bash
