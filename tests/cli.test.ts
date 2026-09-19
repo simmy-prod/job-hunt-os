@@ -167,3 +167,21 @@ for (const args of [["schedule"], ["schedule", "start"], ["schedule", "run", "--
     assert.equal(cli(args).status, 2);
   });
 }
+test("write approval refuses a non-interactive caller such as a scheduler or coding agent", () => {
+  const result = cli(["writes", "approve", "abc123abc123"]);
+  assert.equal(result.status, 2); assert.match(result.stderr, /interactive terminal/); assert.equal(result.stdout, "");
+});
+for (const [args, message] of [
+  [["writes", "propose", "application.set_stage", "--id", "application-example-two", "--stage", "Applied", "--demo"], /confirm_applied/],
+  [["writes", "propose", "company.rename", "--id", "target-northwind", "--demo"], /Not an allowlisted write operation/],
+  [["writes", "apply", "--demo", "--execute"], /needs a Notion source/],
+  [["writes", "apply", "--demo", "--dry-run", "--execute"], /not both/],
+  [["writes", "apply", "--no-record"], /does not accept/],
+  [["writes", "submit"], /Usage/],
+  [["plan", "--demo", "--execute"], /only applies to writes/],
+] as Array<[string[], RegExp]>) {
+  test(`CLI refuses unsafe or ignored write arguments: ${args.slice(0, 3).join(" ")} ${args.at(-1)}`, () => {
+    const result = cli(args);
+    assert.equal(result.status, 2); assert.match(result.stderr, message);
+  });
+}

@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdtempSync, mkdirSync, copyFileSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkPublicSample, checkRuntimeSource } from "../scripts/check-boundaries.mjs";
+import { checkPublicSample, checkRuntimeSource, checkWriteIsolation } from "../scripts/check-boundaries.mjs";
 import { buildPublic } from "../scripts/build-public.mjs";
 import { root } from "./helpers.js";
 
@@ -38,6 +38,8 @@ for (const source of [
   'import Anthropic from "@anthropic-ai/sdk";', 'import OpenAI from "openai";',
   'import { exec } from "node:child_process";', 'import "@modelcontextprotocol/sdk";',
   'await import("openai");', 'eval("x")', 'new Function("return 1")',
+  'client.pages.create({parent: {}, properties: {}});', 'client.comments.create({});', 'this.client.blocks.delete({});',
+  'client.dataSources.update({});', 'client.databases.update({});', 'client.pages.move({});',
 ]) test(`runtime boundary rejects ${source}`, () => {
   assert.ok(checkRuntimeSource(source, "src/example.ts").length > 0);
 });
@@ -54,6 +56,16 @@ test("only the credentials module may start a subprocess, and only the Keychain 
     ['import * as child from "node:child_process";', "src/credentials.ts"],
   ]) assert.ok(checkRuntimeSource(source!, filename!).length > 0, source);
 });
-test("runtime boundary accepts the approved direct Notion SDK", () => {
+test("runtime boundary accepts the approved direct Notion SDK and allowlisted operations", () => {
   assert.deepEqual(checkRuntimeSource('import { Client } from "@notionhq/client";', "src/notion.ts"), []);
+  assert.deepEqual(checkRuntimeSource('client.pages.update({}); client.pages.retrieve({}); client.dataSources.retrieve({});', "src/notion-writer.ts"), []);
+});
+
+test("the unattended scheduler cannot reach a write module, directly or indirectly", () => {
+  const clean = new Map([["src/scheduler.ts", 'import { runMorning } from "./workflow.js";'], ["src/workflow.ts", 'import { hash } from "./planner.js";']]);
+  assert.deepEqual(checkWriteIsolation(clean), []);
+  const direct = new Map([["src/scheduler.ts", 'import { applyWrites } from "./write-workflow.js";']]);
+  assert.match(checkWriteIsolation(direct).join(), /write-workflow/);
+  const indirect = new Map([["src/scheduler.ts", 'import { x } from "./workflow.js";'], ["src/workflow.ts", 'export { Outbox } from "./outbox.js";']]);
+  assert.match(checkWriteIsolation(indirect).join(), /outbox\.ts through src\/workflow\.ts/);
 });

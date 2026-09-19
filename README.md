@@ -38,8 +38,14 @@ Two layers do the daily work, and they're deliberately separate:
   `npm run doctor`): a plain Node.js program, no model or LLM API calls.
   It reads the Notion target database through Notion's read-only API and
   computes which targets are due, which follow-ups are due today, and which
-  rows need human review. See [`docs/runtime.md`](docs/runtime.md) for the
-  full contract.
+  rows need human review. A separate `npm run writes` command group can set
+  a small allowlist of Notion fields (Last Checked, Next Action and its
+  date, Pipeline Stage) through a local outbox with idempotency keys,
+  read-back conflict checks, and a dry run by default. Anything beyond
+  Last Checked needs a human to approve it in an interactive terminal, and
+  `Applied` additionally needs a typed confirmation that the application
+  was already submitted by hand. It never submits applications or sends
+  messages. See [`docs/runtime.md`](docs/runtime.md) for the full contract.
 - **Claude Code skills** (`.claude/skills`, `.claude/commands`): the
   user-invoked, judgment-requiring work the deterministic runtime doesn't
   do - scanning job boards, researching companies and interviewers, drilling
