@@ -86,9 +86,9 @@ export function rejectWrite(options: {root: string; clock: Clock; id: string}): 
   } finally { outbox.close(); }
 }
 
+// Read-only: never creates .runtime or the outbox.
 export function listWrites(root: string): StoredIntent[] {
-  const outbox = new Outbox(root);
-  try { return outbox.list(); } finally { outbox.close(); }
+  return Outbox.readAll(root);
 }
 
 export type ApplyOutcome = "would_send" | "awaiting_approval" | "skipped_claimed" | "applied" | "reconciled" | "conflict" | "retry" | "failed";
@@ -102,32 +102,40 @@ export interface ApplyResult {
   errorCode?: ErrorCode;
 }
 
-// Dry run by default: without execute it never builds a writer, so it never
-// reads the write credential, contacts Notion, or changes local state.
+// Dry run by default: without execute it opens the outbox read-only (or not
+// at all if none exists) and never builds a writer, so it never reads the
+// write credential, contacts Notion, takes a lock, or creates or changes
+// any local file.
 export async function applyWrites(options: {
   config: Config; root: string; clock: Clock; execute: boolean; writer: () => PageWriter;
 }): Promise<{mode: "dry_run" | "execute"; ok: boolean; results: ApplyResult[]}> {
+  if (!options.execute) {
+    const results = Outbox.readOpen(options.root, sourceKey(options.config)).map(({intent, approval}): ApplyResult => {
+      const base = {id: intent.id, operation: intent.operation, recordId: intent.recordId, fields: intentFields(intent)};
+      const problem = approvalProblem(intent, approval);
+      return problem ? {...base, outcome: "awaiting_approval", reason: problem} : {...base, outcome: "would_send"};
+    });
+    return {mode: "dry_run", ok: true, results};
+  }
   // An executed run holds its own writes lock (not the morning-plan lock).
-  // The dry run takes no lock, like every other read-only command.
-  const lock = options.execute ? acquireLock(options.root, "writes") : undefined;
+  const lock = acquireLock(options.root, "writes");
   let outbox: Outbox | undefined;
   try {
     outbox = new Outbox(options.root);
-    if (options.execute) outbox.prune(options.clock.now());
+    outbox.prune(options.clock.now());
     const results: ApplyResult[] = [];
     let writer: PageWriter | undefined;
     for (const intent of outbox.open(sourceKey(options.config))) {
       const base = {id: intent.id, operation: intent.operation, recordId: intent.recordId, fields: intentFields(intent)};
       const problem = approvalProblem(intent, outbox.approval(intent.id));
       if (problem) { results.push({...base, outcome: "awaiting_approval", reason: problem}); continue; }
-      if (!options.execute) { results.push({...base, outcome: "would_send"}); continue; }
       writer ??= options.writer();
       if (!outbox.claim(intent.id, options.clock.now())) { results.push({...base, outcome: "skipped_claimed"}); continue; }
       const result = await applyOne(outbox, writer, intent, options);
       results.push({...base, ...result});
     }
     const ok = results.every((result) => !["conflict", "retry", "failed"].includes(result.outcome));
-    return {mode: options.execute ? "execute" : "dry_run", ok, results};
+    return {mode: "execute", ok, results};
   } finally {
     outbox?.close();
     lock?.release();

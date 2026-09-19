@@ -31,6 +31,10 @@ export interface WriteCounts {
 }
 
 interface Row { [key: string]: unknown }
+function toApproval(row: Row | undefined): Approval | null {
+  return row ? {idempotencyKey: String(row.idempotency_key), method: row.method as Approval["method"],
+    attestation: (row.attestation ?? null) as Approval["attestation"]} : null;
+}
 function toIntent(row: Row): StoredIntent {
   const key = String(row.idempotency_key);
   return {
@@ -155,9 +159,7 @@ export class Outbox {
   }
 
   approval(id: string): Approval | null {
-    const row = this.db.prepare("SELECT * FROM approvals WHERE intent_id = ?").get(id);
-    return row ? {idempotencyKey: String(row.idempotency_key), method: row.method as Approval["method"],
-      attestation: (row.attestation ?? null) as Approval["attestation"]} : null;
+    return toApproval(this.db.prepare("SELECT * FROM approvals WHERE intent_id = ?").get(id));
   }
 
   approve(id: string, attestation: "submitted" | null, now: Date): void {
@@ -187,10 +189,6 @@ export class Outbox {
   open(sourceKey: string): StoredIntent[] {
     return this.db.prepare(`SELECT * FROM intents WHERE source_key = ? AND state IN ('awaiting_approval', 'approved', 'in_flight')
       ORDER BY created_at, id`).all(sourceKey).map(toIntent);
-  }
-
-  list(): StoredIntent[] {
-    return this.db.prepare("SELECT * FROM intents ORDER BY created_at, id").all().map(toIntent);
   }
 
   // Atomic claim. A fresh in_flight claim belongs to another run; an old one
@@ -254,11 +252,36 @@ export class Outbox {
 
   close(): void { this.db.close(); }
 
+  // Read-only views for commands that must leave no local footprint (the
+  // writes dry run, `writes status`, `status`). They open the outbox with
+  // readOnly: true and never create .runtime, the file, or a journal. A
+  // missing outbox reads as empty.
+  private static read<T>(root: string, empty: T, work: (db: DatabaseSync) => T): T {
+    const db = readPrivateDatabase(root, "writes.sqlite", "write outbox");
+    if (!db) return empty;
+    try {
+      const version = db.prepare("PRAGMA user_version").get()?.user_version;
+      if (version !== 1 && version !== 2) throw new Error();
+      return work(db);
+    } catch {
+      throw new AppError("STORAGE", "Cannot read the private write outbox. Check file permissions and outbox schema version.");
+    } finally { db.close(); }
+  }
+
+  static readOpen(root: string, sourceKey: string): Array<{intent: StoredIntent; approval: Approval | null}> {
+    return Outbox.read(root, [], (db) => db.prepare(`SELECT * FROM intents WHERE source_key = ?
+      AND state IN ('awaiting_approval', 'approved', 'in_flight') ORDER BY created_at, id`).all(sourceKey).map((row) => ({
+      intent: toIntent(row), approval: toApproval(db.prepare("SELECT * FROM approvals WHERE intent_id = ?").get(String(row.id))),
+    })));
+  }
+
+  static readAll(root: string): StoredIntent[] {
+    return Outbox.read(root, [], (db) => db.prepare("SELECT * FROM intents ORDER BY created_at, id").all().map(toIntent));
+  }
+
   // Read-only counts for `status`. Never creates .runtime or the outbox.
   static readCounts(root: string, sourceKey: string): WriteCounts | null {
-    const db = readPrivateDatabase(root, "writes.sqlite", "write outbox");
-    if (!db) return null;
-    try {
+    return Outbox.read<WriteCounts | null>(root, null, (db) => {
       const counts: WriteCounts = {awaitingApproval: 0, approved: 0, inFlight: 0, failed: 0, conflict: 0};
       const names: Partial<Record<IntentState, keyof WriteCounts>> = {
         awaiting_approval: "awaitingApproval", approved: "approved", in_flight: "inFlight", failed: "failed", conflict: "conflict",
@@ -268,8 +291,6 @@ export class Outbox {
         if (name) counts[name] = Number(row.n);
       }
       return counts;
-    } catch {
-      throw new AppError("STORAGE", "Cannot read the private write outbox. Check file permissions and outbox schema version.");
-    } finally { db.close(); }
+    });
   }
 }

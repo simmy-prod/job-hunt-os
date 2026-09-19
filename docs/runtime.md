@@ -525,8 +525,12 @@ go sooner than value-free audit rows.
 
 - `writes apply` is a dry run unless `--execute` is given. The dry run
   lists which intents would be sent and which properties they touch, then
-  exits without reading the write credential, contacting Notion, or
-  changing any local state.
+  exits without reading the write credential, contacting Notion, taking a
+  lock, or creating or changing any local file. It opens
+  `.runtime/writes.sqlite` with `readOnly: true`; if the outbox (or
+  `.runtime` itself) does not exist yet, it reports no intents and creates
+  nothing. A regression test starts from an empty directory and checks that
+  it is still empty afterwards.
 - Each `PATCH` is one atomic Notion request containing every property for
   that intent, so a single intent cannot half-apply (for example,
   `Applied` without its date).
@@ -589,7 +593,9 @@ npm run writes -- status [--json]
 `propose` reads the current record through the normal read-only source to
 capture expected values, so it needs `NOTION_TOKEN` (or `--demo`) but never
 the write token. `status` lists intents with operation, record id, state,
-and field names only.
+and field names only. Like the dry run and the top-level `status`, it opens
+the outbox read-only and creates nothing when none exists. Only `propose`,
+`approve`, `reject`, and `apply --execute` open the outbox for writing.
 
 ## Privacy boundary
 

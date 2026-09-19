@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -9,7 +10,7 @@ import { AppError } from "../src/errors.js";
 import type { PageWriter } from "../src/notion-writer.js";
 import { Outbox } from "../src/outbox.js";
 import { acquireLock } from "../src/lock.js";
-import { applyWrites, approveWrite, proposeWrite, readWriteCounts, rejectWrite } from "../src/write-workflow.js";
+import { applyWrites, approveWrite, listWrites, proposeWrite, readWriteCounts, rejectWrite } from "../src/write-workflow.js";
 import { approvalProblem, parseWriteRequest, policy, writableFields } from "../src/writes.js";
 import type { FieldValues, WritableField, WriteRequest } from "../src/writes.js";
 import { root, snapshot } from "./helpers.js";
@@ -330,4 +331,28 @@ test("status counts are per config, read-only, and absent before any proposal", 
   // Editing only the schedule block keeps the same scope, like the run key.
   const scheduled = configSchema.parse({...demoConfig, schedule: {enabled: true, time: "08:00"}});
   assert.deepEqual(readWriteCounts(dir, scheduled), readWriteCounts(dir, demoConfig));
+});
+
+test("regression: a dry run and writes status on an empty runtime create no local state", async () => {
+  const dir = temporary();
+  const result = await apply(dir, () => { throw new Error("writer must not be built in a dry run"); }, clock, false);
+  assert.deepEqual(result, {mode: "dry_run", ok: true, results: []});
+  assert.deepEqual(listWrites(dir), []);
+  assert.equal(readWriteCounts(dir, demoConfig), null);
+  assert.equal(existsSync(join(dir, ".runtime")), false);
+  assert.deepEqual(readdirSync(dir), []);
+});
+
+test("a dry run over an existing outbox leaves every runtime file byte-identical", async () => {
+  const dir = temporary();
+  await propose(dir, {operation: "target.mark_checked", recordId: "target-northwind"});
+  await propose(dir, {operation: "application.set_stage", recordId: "application-example-two", stage: "Screen"});
+  const snapshotFiles = () => Object.fromEntries(readdirSync(join(dir, ".runtime")).sort().map((name) =>
+    [name, createHash("sha256").update(readFileSync(join(dir, ".runtime", name))).digest("hex")]));
+  const before = snapshotFiles();
+  const result = await apply(dir, () => { throw new Error("writer must not be built in a dry run"); }, clock, false);
+  assert.deepEqual(result.results.map((item) => item.outcome).sort(), ["awaiting_approval", "would_send"]);
+  listWrites(dir); readWriteCounts(dir, demoConfig);
+  assert.deepEqual(snapshotFiles(), before);
+  assert.equal(existsSync(join(dir, ".runtime/writes.lock")), false);
 });

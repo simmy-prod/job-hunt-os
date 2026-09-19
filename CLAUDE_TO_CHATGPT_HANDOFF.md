@@ -77,11 +77,26 @@ earlier "no scheduler or discovery on master" deviation no longer applies.
 
 | Check | Result |
 |---|---|
-| `npm run check` (typecheck, lint, tests, privacy) | Pass, 219/219 |
+| `npm run check` (typecheck, lint, tests, privacy) | Pass, 221/221 |
 | `npm run build:public` | Pass, only `index.html` and `data.json` |
 | `git diff --check` | Pass |
 | Manual `--demo` CLI run | propose, duplicate, status counts, dry run, refusals as documented |
 | Live Notion write | Not run: no `NOTION_WRITE_TOKEN` yet, and a live write needs Simmy's go-ahead |
+
+### Review fix: dry run is now genuinely read-only
+
+Simmy found that `writes apply --demo --json` on an empty runtime created
+`.runtime/writes.sqlite`, contradicting the "changes no local state"
+guarantee. Cause: the dry run and `writes status` both built an `Outbox`,
+whose constructor creates the file and schema. Fix: both now go through
+read-only static readers (`Outbox.readOpen`, `Outbox.readAll`, alongside
+`readCounts`) that open with `readOnly: true`, never create `.runtime`, and
+treat a missing outbox as empty. Only `propose`, `approve`, `reject`, and
+`apply --execute` open it for writing. New regression tests: an empty
+directory stays empty after a dry run, `writes status`, and the status
+counts; and over an existing outbox every runtime file stays byte-identical
+and no lock file appears. The empty-directory test was confirmed to fail
+against the previous code.
 
 ### Not implemented
 
