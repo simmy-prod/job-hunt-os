@@ -6,8 +6,15 @@ export const dateOnly = z.iso.date();
 export const isoTimestamp = z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/, "Expected an ISO 8601 timestamp with seconds and a timezone offset");
 export const text = z.string().trim().min(1).max(4000);
 export const webUrl = z.url().refine((value) => {
-  const url = new URL(value);
-  return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password;
+  // z.url()'s own check accepts some strings the URL constructor still
+  // rejects outright (e.g. "not-a-url"); catch rather than let a malformed
+  // value throw out of validation instead of failing it.
+  try {
+    const url = new URL(value);
+    return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password;
+  } catch {
+    return false;
+  }
 }, "Expected an HTTP or HTTPS URL without credentials");
 export const stage = z.enum(["Researching", "Applied", "Screen", "Interview", "Final", "Offer", "Closed"]);
 export const frequency = z.enum(["daily", "weekly"]);
@@ -40,12 +47,29 @@ export const listingSchema = z.strictObject({
   canonicalUrl: webUrl,
   locations: z.array(text),
   contentHash: z.string().regex(/^[a-f0-9]{64}$/),
+  // Preserved across a content change: identity is `${sourceId}:${externalId}`,
+  // not a counter, so a changed listing updates in place instead of forking.
+  firstSeenAt: isoTimestamp,
+  lastSeenAt: isoTimestamp,
 });
 export const matchDecisionSchema = z.strictObject({
   listingId: identifier,
   ruleVersion: z.number().int().positive(),
   decision: z.enum(["match", "not_a_match", "needs_review"]),
   reasons: z.array(text).min(1),
+});
+// A raw listing that never became a Listing at all (no title, no company, no
+// usable external ID, ...). externalId is nullable because a payload can be
+// too malformed to even identify, in which case it cannot be tracked as a
+// stable review-queue entry across runs; see src/discoveryStore.ts.
+export const discoveryReviewSchema = z.strictObject({
+  sourceId: identifier,
+  // Not `identifier`: one review reason is that the raw external ID itself
+  // fails the safe-identifier format, so this field must be able to hold
+  // exactly the value that failed, not re-impose the same constraint.
+  externalId: text.nullable(),
+  reason: text,
+  observedAt: isoTimestamp,
 });
 export const snapshotSchema = z.strictObject({
   schemaVersion: z.literal(1),
@@ -83,6 +107,9 @@ export type Snapshot = z.infer<typeof snapshotSchema>;
 export type Target = z.infer<typeof targetSchema>;
 export type Application = z.infer<typeof applicationSchema>;
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;
+export type Listing = z.infer<typeof listingSchema>;
+export type MatchDecision = z.infer<typeof matchDecisionSchema>;
+export type DiscoveryReview = z.infer<typeof discoveryReviewSchema>;
 
 export function validate<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
   const result = schema.safeParse(value);

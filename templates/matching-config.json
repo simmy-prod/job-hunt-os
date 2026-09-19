@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "ruleVersion": 1,
+  "titleIncludeKeywords": [
+    "Business Analyst",
+    "Administration",
+    "Administrator",
+    "Coordinator",
+    "Operations",
+    "Support"
+  ],
+  "titleExcludeKeywords": [
+    "Software Engineer",
+    "Developer",
+    "Programmer",
+    "AI-Native SWE",
+    "Full Stack",
+    "Front End",
+    "Back End"
+  ]
+}

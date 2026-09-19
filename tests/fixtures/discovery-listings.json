@@ -1,0 +1,18 @@
+{
+  "pages": [
+    {
+      "rawListings": [
+        {"externalId": "1001", "title": "Business Analyst", "company": "Northwind Example", "url": "https://jobs.example.org/northwind/1001", "locations": ["Melbourne, AU"]},
+        {"externalId": "1001", "title": "Business Analyst II", "company": "Northwind Example", "url": "https://jobs.example.org/northwind/1001", "locations": ["Melbourne, AU"]},
+        {"externalId": "1002", "company": "Northwind Example", "url": "https://jobs.example.org/northwind/1002", "locations": ["Melbourne, AU"]}
+      ],
+      "nextCursor": "page-2"
+    },
+    {
+      "rawListings": [
+        {"externalId": "1003", "title": "Software Engineer", "company": "Northwind Example", "url": "https://jobs.example.org/northwind/1003", "locations": ["Remote"]}
+      ],
+      "nextCursor": null
+    }
+  ]
+}

@@ -2,13 +2,35 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { configSchema, notionConfigSchema } from "../src/config.js";
 import { snapshotSchema } from "../src/domain.js";
+import type { JobSourceAdapter, JobSourcePage } from "../src/jobSource.js";
+import { matchingConfigSchema } from "../src/matchingConfig.js";
 
 export const root = fileURLToPath(new URL("../..", import.meta.url));
 export const config = configSchema.parse(JSON.parse(readFileSync(`${root}/templates/runtime-config.json`, "utf8")));
 export const notionConfig = notionConfigSchema.parse(config.source);
+export const matchingConfig = matchingConfigSchema.parse(JSON.parse(readFileSync(`${root}/templates/matching-config.json`, "utf8")));
 export const now = new Date("2026-09-18T00:00:00Z");
 export function snapshot() {
   return snapshotSchema.parse(JSON.parse(readFileSync(`${root}/tests/fixtures/snapshot.json`, "utf8")));
+}
+export function discoveryFixturePages(): JobSourcePage[] {
+  const parsed = JSON.parse(readFileSync(`${root}/tests/fixtures/discovery-listings.json`, "utf8")) as {pages: JobSourcePage[]};
+  return parsed.pages;
+}
+// A minimal in-memory JobSourceAdapter that walks a fixed page list in order,
+// following each page's own nextCursor, the same way a real adapter would
+// walk a provider's real pagination. Edge cases (a non-advancing cursor, a
+// failing fetch) are constructed ad hoc per test instead of through here.
+export function fixtureAdapter(sourceId: string, pages: readonly JobSourcePage[]): JobSourceAdapter {
+  const expectedCursor = (index: number): string | null => (index === 0 ? null : pages[index - 1]!.nextCursor);
+  return {
+    sourceId,
+    async fetchPage(cursor) {
+      const index = pages.findIndex((_, candidate) => expectedCursor(candidate) === cursor);
+      if (index === -1) throw new Error(`fixtureAdapter "${sourceId}": unexpected cursor ${String(cursor)}`);
+      return pages[index]!;
+    },
+  };
 }
 export function metadata() {
   const properties = {
