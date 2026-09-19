@@ -15,6 +15,11 @@ const rawListingShape = z.object({
   company: z.string().optional(),
   url: z.string().optional(),
   locations: z.array(z.string()).optional(),
+  // Both genuinely optional on the raw payload: most real ATS listings omit
+  // pay, and not every provider labels employment type. Neither one missing
+  // makes a listing malformed; see evaluateMatch for how "unknown" is judged.
+  employmentType: z.string().optional(),
+  compensationText: z.string().optional(),
 });
 
 export type NormalizedListing = Omit<Listing, "firstSeenAt" | "lastSeenAt">;
@@ -23,11 +28,21 @@ export type NormalizationResult =
   | {outcome: "listing"; listing: NormalizedListing}
   | {outcome: "review"; review: DiscoveryReview};
 
+// A blank or unparseable optional field is treated as "not provided", not as
+// malformed input: only the required fields (title, company, url, location)
+// can fail a listing outright.
+function optionalText(value: string | undefined): string | null {
+  if (value === undefined) return null;
+  const parsed = text.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
 // Hashes only the fields a human would notice changed. sourceId/externalId
 // are excluded: they never change without changing identity itself.
-export function contentHashOf(listing: Pick<NormalizedListing, "title" | "company" | "canonicalUrl" | "locations">): string {
+export function contentHashOf(listing: Pick<NormalizedListing, "title" | "company" | "canonicalUrl" | "locations" | "employmentType" | "compensationText">): string {
   return createHash("sha256").update(JSON.stringify({
     title: listing.title, company: listing.company, canonicalUrl: listing.canonicalUrl, locations: [...listing.locations].sort(),
+    employmentType: listing.employmentType, compensationText: listing.compensationText,
   })).digest("hex");
 }
 
@@ -53,11 +68,13 @@ export function normalizeListing(raw: unknown, sourceId: string, observedAt: str
   if (!url.success) return review(externalId, "Listing has a missing or invalid URL.");
   const locations = (data.locations ?? []).map((location) => location.trim()).filter(Boolean);
   if (locations.length === 0) return review(externalId, "Listing has no location information.");
+  const employmentType = optionalText(data.employmentType);
+  const compensationText = optionalText(data.compensationText);
 
   const listing: NormalizedListing = {
     id: `${sourceId}:${externalId}`, sourceId, externalId, title: title.data, company: company.data,
-    canonicalUrl: url.data, locations,
-    contentHash: contentHashOf({title: title.data, company: company.data, canonicalUrl: url.data, locations}),
+    canonicalUrl: url.data, locations, employmentType, compensationText,
+    contentHash: contentHashOf({title: title.data, company: company.data, canonicalUrl: url.data, locations, employmentType, compensationText}),
   };
   return {outcome: "listing", listing};
 }
@@ -89,18 +106,34 @@ export function normalizeBatch(rawListings: readonly unknown[], sourceId: string
   return {listings: [...byId.values()].sort(byIdAscending), reviews, duplicatesInBatch};
 }
 
-// Ambiguous title matches become "needs_review", never a guessed match, per
-// the search's non-coding scope (see CLAUDE.md). Exclusion is checked first:
-// a title naming both an included and an excluded keyword is not a match.
+// Every signal is evaluated, not short-circuited on the first hit, so a
+// decision's reasons name everything that applies. Precedence is fixed and
+// deterministic: any disqualifying reason makes it "not_a_match" outright;
+// otherwise any ambiguous reason makes it "needs_review"; only a title with
+// no disqualifying or ambiguous signal and at least one included keyword is
+// "match". This means a title that would otherwise match is still sent to
+// review, never guessed, when employment type or pay cannot be confirmed.
 export function evaluateMatch(listing: NormalizedListing, config: MatchingConfig): MatchDecision {
   const titleLower = listing.title.toLowerCase();
-  const excluded = config.titleExcludeKeywords.find((keyword) => titleLower.includes(keyword.toLowerCase()));
-  if (excluded) {
-    return {listingId: listing.id, ruleVersion: config.ruleVersion, decision: "not_a_match", reasons: [`Title contains excluded keyword "${excluded}".`]};
+  const disqualifying: string[] = [];
+  const ambiguous: string[] = [];
+  const supporting: string[] = [];
+
+  const excludedKeyword = config.titleExcludeKeywords.find((keyword) => titleLower.includes(keyword.toLowerCase()));
+  if (excludedKeyword) disqualifying.push(`Title contains excluded keyword "${excludedKeyword}".`);
+  const includedKeywords = config.titleIncludeKeywords.filter((keyword) => titleLower.includes(keyword.toLowerCase()));
+  supporting.push(...includedKeywords.map((keyword) => `Title contains included keyword "${keyword}".`));
+
+  if (config.allowedEmploymentTypes) {
+    if (listing.employmentType === null) ambiguous.push("Employment type is unknown.");
+    else if (!config.allowedEmploymentTypes.includes(listing.employmentType)) {
+      disqualifying.push(`Employment type "${listing.employmentType}" is not in the allowed list.`);
+    }
   }
-  const included = config.titleIncludeKeywords.filter((keyword) => titleLower.includes(keyword.toLowerCase()));
-  if (included.length > 0) {
-    return {listingId: listing.id, ruleVersion: config.ruleVersion, decision: "match", reasons: included.map((keyword) => `Title contains included keyword "${keyword}".`)};
-  }
+  if (config.requireCompensation && listing.compensationText === null) ambiguous.push("Pay is unknown.");
+
+  if (disqualifying.length > 0) return {listingId: listing.id, ruleVersion: config.ruleVersion, decision: "not_a_match", reasons: disqualifying};
+  if (ambiguous.length > 0) return {listingId: listing.id, ruleVersion: config.ruleVersion, decision: "needs_review", reasons: ambiguous};
+  if (supporting.length > 0) return {listingId: listing.id, ruleVersion: config.ruleVersion, decision: "match", reasons: supporting};
   return {listingId: listing.id, ruleVersion: config.ruleVersion, decision: "needs_review", reasons: ["Title does not contain a recognized included keyword."]};
 }

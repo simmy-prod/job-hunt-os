@@ -487,36 +487,57 @@ own reach; no code calls it yet because no adapter exists yet.
 
 `normalizeListing` (`src/normalize.ts`) takes one untrusted raw listing
 (already coerced by its adapter into the common shape
-`{externalId, title, company, url, locations}`) and either produces a
-`Listing` or a `DiscoveryReview`. It never throws on bad input: a missing or
-unsafe external ID, missing title/company, a missing or invalid URL
-(including one with embedded credentials), or no location information all
-become a review item with an explicit reason, never a guessed listing and
-never a failed run. `normalizeBatch` runs this over every raw listing from
-one source's fetch and collapses repeated external IDs within that batch
-into one listing, deterministically (the last occurrence in fetch order
-wins), reporting the collision count as `duplicatesInBatch` rather than
-silently dropping it.
+`{externalId, title, company, url, locations, employmentType?, compensationText?}`)
+and either produces a `Listing` or a `DiscoveryReview`. It never throws on
+bad input: a missing or unsafe external ID, missing title/company, a missing
+or invalid URL (including one with embedded credentials), or no location
+information all become a review item with an explicit reason, never a
+guessed listing and never a failed run. `employmentType` and
+`compensationText` are genuinely optional on the raw listing (most real
+postings omit pay, and not every provider labels employment type): their
+absence never blocks normalization, it is preserved as `null` on the
+`Listing`, and it is `evaluateMatch`, not normalization, that decides what an
+absent value means for role fit. `normalizeBatch` runs this over every raw
+listing from one source's fetch and collapses repeated external IDs within
+that batch into one listing, deterministically (the last occurrence in fetch
+order wins), reporting the collision count as `duplicatesInBatch` rather
+than silently dropping it.
 
 A listing's identity, `${sourceId}:${externalId}`, is a pure function of the
 adapter's own field values, not a counter: re-normalizing the same raw
 listing on a later run always produces the same id. `contentHashOf` hashes
-only `title`/`company`/`canonicalUrl`/`locations` (sorted, so reordering
-alone never counts as a change), so a same-identity listing whose visible
-content changed can be told apart from one that did not.
+`title`/`company`/`canonicalUrl`/`locations` (sorted, so reordering alone
+never counts as a change) plus `employmentType`/`compensationText`, so a
+provider adding a salary range or relabeling employment type on the same
+listing counts as changed content, not a no-op.
 
 ### Matching
 
 `evaluateMatch` (`src/normalize.ts`) judges one normalized `Listing` against
 a private matching configuration (`targets/matching.json`, gitignored, from
 `templates/matching-config.json`; schema in `src/matchingConfig.ts`):
-`titleIncludeKeywords` and `titleExcludeKeywords`, plus a `ruleVersion`
-recorded on every decision. An excluded keyword wins over an included one
-(a title naming both is `not_a_match`, never a guessed match), and a title
-matching neither list is `needs_review`, never silently dropped or silently
-matched. This is the only place discovery reads search criteria; it never
-reads `profile/` or `pipeline/`, and no listing's content is ever sent
-anywhere in this slice.
+`titleIncludeKeywords`, `titleExcludeKeywords`, `allowedEmploymentTypes`
+(`null` means no restriction), and `requireCompensation`, plus a
+`ruleVersion` recorded on every decision. Every signal is evaluated, not
+short-circuited on the first hit, with a fixed precedence:
+
+1. Any disqualifying signal (an excluded title keyword, or a *known*
+   employment type outside `allowedEmploymentTypes`) makes the decision
+   `not_a_match`, regardless of anything else.
+2. Otherwise, any ambiguous signal (an *unknown* employment type when
+   `allowedEmploymentTypes` is set, or missing pay when
+   `requireCompensation` is `true`) makes it `needs_review`. A title that
+   would otherwise match is still sent to review here, never guessed.
+3. Otherwise, at least one included title keyword makes it `match`.
+4. Otherwise (no disqualifying, ambiguous, or included signal) it is
+   `needs_review`.
+
+The shipped template is permissive (`allowedEmploymentTypes: null`,
+`requireCompensation: false`), since most real postings omit pay and not
+every source labels employment type; a stricter local `targets/matching.json`
+can opt into both checks. This is the only place discovery reads search
+criteria; it never reads `profile/` or `pipeline/`, and no listing's content
+is ever sent anywhere in this slice.
 
 ### Persistence and the review queue
 

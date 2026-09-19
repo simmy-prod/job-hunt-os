@@ -46,6 +46,12 @@ export const listingSchema = z.strictObject({
   company: text,
   canonicalUrl: webUrl,
   locations: z.array(text),
+  // Both optional on the raw listing itself: most real postings omit pay,
+  // and a missing employment type is not malformed input, just unknown.
+  // Neither absence blocks normalization; evaluateMatch (src/normalize.ts)
+  // is where an unknown value becomes a "needs_review" match decision.
+  employmentType: text.nullable(),
+  compensationText: text.nullable(),
   contentHash: z.string().regex(/^[a-f0-9]{64}$/),
   // Preserved across a content change: identity is `${sourceId}:${externalId}`,
   // not a counter, so a changed listing updates in place instead of forking.

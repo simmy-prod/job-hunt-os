@@ -61,6 +61,8 @@ export class DiscoveryStore {
           company TEXT NOT NULL,
           canonical_url TEXT NOT NULL,
           locations_json TEXT NOT NULL,
+          employment_type TEXT,
+          compensation_text TEXT,
           content_hash TEXT NOT NULL,
           first_seen_at TEXT NOT NULL,
           last_seen_at TEXT NOT NULL
@@ -93,12 +95,14 @@ export class DiscoveryStore {
         const previous = this.db.prepare("SELECT content_hash, first_seen_at FROM listings WHERE id = ?").get(listing.id) as
           {content_hash: string; first_seen_at: string} | undefined;
         const firstSeenAt = previous?.first_seen_at ?? observedAt;
-        this.db.prepare(`INSERT INTO listings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        this.db.prepare(`INSERT INTO listings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET title=excluded.title, company=excluded.company,
             canonical_url=excluded.canonical_url, locations_json=excluded.locations_json,
+            employment_type=excluded.employment_type, compensation_text=excluded.compensation_text,
             content_hash=excluded.content_hash, last_seen_at=excluded.last_seen_at`).run(
           listing.id, listing.sourceId, listing.externalId, listing.title, listing.company,
-          listing.canonicalUrl, JSON.stringify(listing.locations), listing.contentHash, firstSeenAt, observedAt,
+          listing.canonicalUrl, JSON.stringify(listing.locations), listing.employmentType, listing.compensationText,
+          listing.contentHash, firstSeenAt, observedAt,
         );
         if (!previous) summary.added.push(listing.id);
         else if (previous.content_hash !== listing.contentHash) summary.changed.push(listing.id);
@@ -142,7 +146,8 @@ export class DiscoveryStore {
     const rows = this.db.prepare("SELECT * FROM listings ORDER BY id").all() as Array<Record<string, unknown>>;
     return rows.map((row) => validate(listingSchema, {
       id: row.id, sourceId: row.source_id, externalId: row.external_id, title: row.title, company: row.company,
-      canonicalUrl: row.canonical_url, locations: JSON.parse(row.locations_json as string) as unknown, contentHash: row.content_hash,
+      canonicalUrl: row.canonical_url, locations: JSON.parse(row.locations_json as string) as unknown,
+      employmentType: row.employment_type, compensationText: row.compensation_text, contentHash: row.content_hash,
       firstSeenAt: row.first_seen_at, lastSeenAt: row.last_seen_at,
     }, "Stored listing"));
   }

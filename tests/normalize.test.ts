@@ -19,10 +19,17 @@ test("a well-formed raw listing normalizes to a stable, source-scoped identity",
 test("content hash changes when visible content changes, and ignores location order", () => {
   const base = normalizeListing(good, "example", observedAt);
   const retitled = normalizeListing({...good, title: "Business Analyst II"}, "example", observedAt);
+  const repaid = normalizeListing({...good, compensationText: "$70,000 - $85,000 AUD"}, "example", observedAt);
+  const retyped = normalizeListing({...good, employmentType: "Full-time"}, "example", observedAt);
   assert.equal(base.outcome, "listing"); assert.equal(retitled.outcome, "listing");
-  if (base.outcome !== "listing" || retitled.outcome !== "listing") return;
+  assert.equal(repaid.outcome, "listing"); assert.equal(retyped.outcome, "listing");
+  if (base.outcome !== "listing" || retitled.outcome !== "listing" || repaid.outcome !== "listing" || retyped.outcome !== "listing") return;
   assert.notEqual(base.listing.contentHash, retitled.listing.contentHash);
-  const twoLocations = {title: good.title, company: good.company, canonicalUrl: base.listing.canonicalUrl};
+  // Pay and employment type appearing (a "changed listing" in practice, e.g.
+  // a provider adding a salary range on re-post) also changes the hash.
+  assert.notEqual(base.listing.contentHash, repaid.listing.contentHash);
+  assert.notEqual(base.listing.contentHash, retyped.listing.contentHash);
+  const twoLocations = {title: good.title, company: good.company, canonicalUrl: base.listing.canonicalUrl, employmentType: null, compensationText: null};
   assert.equal(
     contentHashOf({...twoLocations, locations: ["Melbourne, AU", "Sydney, AU"]}),
     contentHashOf({...twoLocations, locations: ["Sydney, AU", "Melbourne, AU"]}),
@@ -50,6 +57,62 @@ for (const [label, raw] of malformedCases) {
     assert.equal(result.review.observedAt, observedAt);
   });
 }
+
+test("employment type and pay are optional: absent on the raw listing, present and null on the normalized one", () => {
+  const result = normalizeListing(good, "example", observedAt);
+  assert.equal(result.outcome, "listing");
+  if (result.outcome !== "listing") return;
+  assert.equal(result.listing.employmentType, null);
+  assert.equal(result.listing.compensationText, null);
+});
+test("employment type and pay are preserved verbatim (trimmed) when the raw listing provides them", () => {
+  const result = normalizeListing({...good, employmentType: " Full-time ", compensationText: " $70,000 - $85,000 AUD "}, "example", observedAt);
+  assert.equal(result.outcome, "listing");
+  if (result.outcome !== "listing") return;
+  assert.equal(result.listing.employmentType, "Full-time");
+  assert.equal(result.listing.compensationText, "$70,000 - $85,000 AUD");
+});
+
+const strictMatching = {...matchingConfig, allowedEmploymentTypes: ["Full-time", "Part-time"], requireCompensation: true};
+
+test("evaluateMatch: an employment type outside the allowed list disqualifies, even with a matching title", () => {
+  const casual = normalizeListing({...good, employmentType: "Casual", compensationText: "$45/hour"}, "example", observedAt);
+  assert.equal(casual.outcome, "listing");
+  if (casual.outcome !== "listing") return;
+  const decision = evaluateMatch(casual.listing, strictMatching);
+  assert.equal(decision.decision, "not_a_match");
+  assert.ok(decision.reasons.some((reason) => /Casual/.test(reason)));
+});
+test("evaluateMatch: an unknown employment type is a review item, not a guessed match", () => {
+  const unknownType = normalizeListing({...good, compensationText: "$70,000 - $85,000 AUD"}, "example", observedAt);
+  assert.equal(unknownType.outcome, "listing");
+  if (unknownType.outcome !== "listing") return;
+  assert.equal(unknownType.listing.employmentType, null);
+  const decision = evaluateMatch(unknownType.listing, strictMatching);
+  assert.equal(decision.decision, "needs_review");
+  assert.deepEqual(decision.reasons, ["Employment type is unknown."]);
+});
+test("evaluateMatch: missing pay is a review item when compensation is required, not a guessed match", () => {
+  const noPay = normalizeListing({...good, employmentType: "Full-time"}, "example", observedAt);
+  assert.equal(noPay.outcome, "listing");
+  if (noPay.outcome !== "listing") return;
+  const decision = evaluateMatch(noPay.listing, strictMatching);
+  assert.equal(decision.decision, "needs_review");
+  assert.deepEqual(decision.reasons, ["Pay is unknown."]);
+});
+test("evaluateMatch: a clean match still requires neither disqualifying nor ambiguous signals", () => {
+  const clean = normalizeListing({...good, employmentType: "Full-time", compensationText: "$70,000 - $85,000 AUD"}, "example", observedAt);
+  assert.equal(clean.outcome, "listing");
+  if (clean.outcome !== "listing") return;
+  const decision = evaluateMatch(clean.listing, strictMatching);
+  assert.equal(decision.decision, "match");
+});
+test("evaluateMatch: a permissive config (no employment-type restriction, pay not required) never reviews on those grounds", () => {
+  const sparse = normalizeListing(good, "example", observedAt);
+  assert.equal(sparse.outcome, "listing");
+  if (sparse.outcome !== "listing") return;
+  assert.equal(evaluateMatch(sparse.listing, matchingConfig).decision, "match");
+});
 
 test("duplicate external IDs within one batch collapse to one listing deterministically", () => {
   const [page] = discoveryFixturePages();

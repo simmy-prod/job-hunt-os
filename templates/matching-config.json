@@ -17,5 +17,7 @@
     "Full Stack",
     "Front End",
     "Back End"
-  ]
+  ],
+  "allowedEmploymentTypes": null,
+  "requireCompensation": false
 }

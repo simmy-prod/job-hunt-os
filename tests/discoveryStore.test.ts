@@ -11,7 +11,8 @@ const temporary = () => mkdtempSync(join(tmpdir(), "job-hunt-discovery-"));
 const listing = (overrides: Partial<NormalizedListing> = {}): NormalizedListing => ({
   id: "example:1001", sourceId: "example", externalId: "1001", title: "Business Analyst",
   company: "Northwind Example", canonicalUrl: "https://jobs.example.org/northwind/1001",
-  locations: ["Melbourne, AU"], contentHash: "a".repeat(64), ...overrides,
+  locations: ["Melbourne, AU"], employmentType: "Full-time", compensationText: null,
+  contentHash: "a".repeat(64), ...overrides,
 });
 
 test("a newly seen listing is added with matching first/last-seen timestamps", () => {

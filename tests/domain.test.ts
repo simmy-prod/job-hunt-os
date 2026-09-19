@@ -9,7 +9,8 @@ test("synthetic domain contracts cover target, application, listing, and decisio
   assert.ok(targetSchema.parse(data.targets[0]));
   assert.ok(applicationSchema.parse(data.applications[0]));
   assert.ok(listingSchema.parse({id: "example:123", sourceId: "example", externalId: "123", title: "Example role",
-    company: "Example Studio", canonicalUrl: "https://jobs.example.org/123", locations: ["Melbourne"], contentHash: "a".repeat(64),
+    company: "Example Studio", canonicalUrl: "https://jobs.example.org/123", locations: ["Melbourne"],
+    employmentType: "Full-time", compensationText: null, contentHash: "a".repeat(64),
     firstSeenAt: "2026-09-18T00:00:00.000Z", lastSeenAt: "2026-09-18T00:00:00.000Z"}));
   assert.ok(matchDecisionSchema.parse({listingId: "example:123", ruleVersion: 1, decision: "needs_review", reasons: ["Pay is unknown"]}));
 });

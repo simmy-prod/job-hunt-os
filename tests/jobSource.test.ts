@@ -58,10 +58,10 @@ test("bounded retry honors Retry-After and does not retry a non-transient failur
 test("fetchAllListings walks every page in cursor order", async () => {
   const adapter = fixtureAdapter("example", discoveryFixturePages());
   const raw = await fetchAllListings(adapter);
-  assert.equal(raw.length, 4);
+  assert.equal(raw.length, 7);
   assert.deepEqual(
     raw.map((item) => (item as {externalId: string}).externalId),
-    ["1001", "1001", "1002", "1003"],
+    ["1001", "1001", "1002", "1003", "1004", "1005", "1006"],
   );
 });
 test("a non-advancing cursor fails without looping forever", async () => {

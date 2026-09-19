@@ -15,6 +15,15 @@ export const matchingConfigSchema = z.strictObject({
   ruleVersion: z.number().int().positive(),
   titleIncludeKeywords: z.array(text).min(1),
   titleExcludeKeywords: z.array(text),
+  // null means "no restriction": a listing's employment type (or its
+  // absence) never affects the decision. A non-null list disqualifies a
+  // *known* type outside it, and turns an *unknown* type into a review
+  // item rather than a guess either way.
+  allowedEmploymentTypes: z.array(text).nullable(),
+  // When true, a listing with no pay information becomes a review item
+  // ("Pay is unknown") instead of a guessed match. Most real postings omit
+  // pay, so this defaults to false in the shipped template.
+  requireCompensation: z.boolean(),
 });
 export type MatchingConfig = z.infer<typeof matchingConfigSchema>;
 
