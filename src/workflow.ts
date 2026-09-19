@@ -13,19 +13,22 @@ export async function runMorning(options: {
   root: string;
   clock: Clock;
   record: boolean;
+  dryRun?: boolean;
 }): Promise<Plan> {
   const now = options.clock.now();
   const day = businessDate(now, options.config.timezone);
   const logicalKey = `morning-plan:v1:${hash(options.config)}:${day}`;
-  const ledger = options.record ? new RunLedger(options.root) : undefined;
+  // dryRun wins even if record is also true, so the "never writes" guarantee
+  // does not depend on the caller passing exactly one flag correctly.
+  const ledger = options.record && !options.dryRun ? new RunLedger(options.root) : undefined;
   try {
     const snapshot = await options.source().read();
     const plan = planMorning(snapshot, now, options.config.timezone);
-    ledger?.record({logicalKey, observedAt: now.toISOString(), plan});
+    ledger?.record({status: "success", logicalKey, observedAt: now.toISOString(), plan});
     return plan;
   } catch (error) {
     const failure = safeError(error);
-    ledger?.record({logicalKey, observedAt: now.toISOString(), errorCode: failure.code});
+    ledger?.record({status: "failed", logicalKey, observedAt: now.toISOString(), errorCode: failure.code});
     throw failure;
   } finally {
     ledger?.close();

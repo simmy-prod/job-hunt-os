@@ -118,11 +118,19 @@ npm run doctor -- [--demo | --config targets/runtime.json] [--json]
   text digest.
 - `--at <ISO timestamp with offset>` injects a fixed clock, for reproducible
   output in tests or manual checks.
-- `--no-record` skips writing to the local SQLite ledger. `doctor` never
-  writes to the ledger regardless of this flag.
-- `--dry-run` is accepted by the CLI parser but has no current effect;
-  resolving that (so no accepted flag is silently ignored) is scoped to the
-  next implementation slice, not this runtime baseline.
+- `--no-record` skips writing to the local SQLite ledger.
+- `--dry-run` also skips writing to the local SQLite ledger, and additionally
+  marks the output as a dry run: the JSON result gets a top-level `dryRun:
+  true` field, and the text digest is prefixed `"Dry run: nothing written to
+  the ledger"`. This distinguishes an explicit, auditable dry run from a
+  plain `--no-record` invocation in scripts or logs that inspect the output.
+  `--dry-run` takes effect even if `--record`-equivalent behavior were passed
+  by mistake elsewhere: the workflow never constructs a `RunLedger` when
+  `--dry-run` is set, regardless of `--no-record`.
+- `--dry-run` and `--no-record` are only accepted with `plan`. Passing either
+  to `doctor` fails with a `CONFIG` error, because `doctor` never writes to
+  the ledger and accepting a flag that has no effect there would be the same
+  silently-ignored-option problem the flags themselves used to have.
 
 Both commands are read-only with respect to Notion and to any job board:
 neither scans job listings, writes to Notion, submits an application, sends
@@ -147,7 +155,7 @@ deliberate `AppError` into a generic, non-leaking message.
 
 ## SQLite ledger location
 
-Every recorded run (unless `--no-record` is passed) writes to
+Every recorded run (unless `--dry-run` or `--no-record` is passed) writes to
 `.runtime/runs.sqlite`, created relative to the repository root the first
 time the runtime runs. `.runtime/` is gitignored and never published.
 `src/ledger.ts` creates the directory at mode `0700` and the database file
@@ -156,6 +164,13 @@ a database file with more than one hard link. Each logical run key
 (`morning-plan:v1:<config hash>:<Melbourne business date>`) is recorded
 atomically across two tables, and the two tables are **not** equally
 private:
+
+Before any of that, `RunLedger.record` validates the incoming record against
+`workflowRunSchema` (`src/domain.ts`): a discriminated union requiring
+exactly one of a `plan` (on `status: "success"`) or an `errorCode` (on
+`status: "failed"`), never both and never neither. This validation runs
+before the SQLite transaction opens, so an invalid or ambiguous record fails
+without touching the database at all.
 
 - `runs` holds the latest state per logical key, including `plan_json` (the
   full serialized `Plan`) and `digest` (the rendered text digest) on a
@@ -237,4 +252,4 @@ already contains an unexpected file.
 | `NOTION` error mid-run | Transient Notion outage, network failure, or pagination did not advance | Retry later; this never leaves a stale successful plan for the same logical run key |
 | `STORAGE` error | `.runtime/` is missing write permission, is a symlink, or the ledger file/journal has an unexpected link count | Fix local file permissions on `.runtime/`; do not hand-edit `.runtime/runs.sqlite` |
 | `POLICY` error | The read-only transport blocked a request that did not match the one allowed GET and the one allowed POST | This indicates a code defect, not a configuration problem; do not work around it by relaxing the transport |
-| CLI silently accepts `--dry-run` but nothing changes | Known gap, tracked for the next implementation slice | No workaround today; do not rely on `--dry-run` to prevent a ledger write, use `--no-record` instead |
+| `CONFIG` error naming `--dry-run`/`--no-record` on `doctor` | Those flags only apply to `plan` | Drop them; `doctor` is always read-only and never writes to the ledger |

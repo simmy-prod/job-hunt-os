@@ -128,12 +128,8 @@ just locally exercised on 26.
 4. `.deep-research/` left untracked. If that research trail should be
    preserved in the repo, it needs an explicit decision and a separate commit;
    it was not folded into this slice.
-5. The CLI accepts `--dry-run` but the flag currently has no effect (it is
-   parsed and then ignored in `src/cli.ts`). Not fixed in this cleanup pass;
-   it is explicitly scoped to Slice 2.0 ("no accepted option may be silently
-   ignored"). Documented as a known gap in `docs/runtime.md`'s
-   troubleshooting table so it isn't mistaken for a working safety flag in
-   the meantime.
+5. ~~The CLI accepts `--dry-run` but the flag currently has no effect.~~
+   **Resolved in Slice 2.0.** See the dedicated section below.
 
 ## Deviation from the supplied plan
 
@@ -159,8 +155,134 @@ the handoff and the approved plan exactly.
 5. ~~Confirm Node 24 compatibility via the CI run on the pushed branch.~~ Done:
    CI passed on both Node 24 and Node 26.
 6. ~~Merge PR #5 once reviewed.~~ Done: PR #5 is merged into `master`.
-7. This mandatory-gate cleanup itself (correcting the merged-state record,
-   resolving the Node 24 status, adding `docs/runtime.md`, and removing the
-   private Notion data source ID from both handoff documents) is its own
-   branch and PR, opened after PR #5 and PR #6. Review and merge that before
-   starting Slice 2.0.
+7. ~~This mandatory-gate cleanup itself...~~ Done: merged as PR #8.
+
+---
+
+## Slice 2.0: foundation consolidation
+
+Branch `feature/slice-2.0-foundation-consolidation`, created fresh from
+`origin/master` at `baf6e34` (the merged gate-cleanup commit). Scope per
+`CHATGPT_TO_CLAUDE_HANDOFF.md`'s Slice 2.0 deliverables: resolve the
+`--dry-run` no-op, add the missing workflow-run domain schema, keep
+everything else read-only and unchanged.
+
+### Summary
+
+- `--dry-run` now has a real, tested effect: it prevents the CLI from ever
+  constructing a `RunLedger`, wins over `--no-record`/`record: true` if both
+  are somehow set, and visibly marks its own output (`dryRun: true` in JSON,
+  a "Dry run: nothing written to the ledger" line in text) so it is
+  distinguishable from a plain `--no-record` invocation in logs or scripts.
+- `--dry-run` and `--no-record` are now rejected with a `CONFIG` error if
+  passed to `doctor`, which never wrote to the ledger to begin with and was
+  silently accepting both flags there (the same "accepted option, no effect"
+  bug as `--dry-run` itself had for `plan`).
+- Added `workflowRunSchema` (`src/domain.ts`): a discriminated union on
+  `status` requiring exactly one of `plan` (success) or `errorCode` (failed).
+  `RunLedger.record` validates every record against it before opening the
+  SQLite transaction, so an ambiguous or incomplete record fails without
+  touching the database. `errors.ts`'s `ErrorCode` is now backed by a zod
+  enum (`errorCodeSchema`) instead of a hand-written union, as the single
+  source of truth the new schema reads from.
+- No scheduler, Notion write, job-board access, or business-logic change of
+  any kind. `planMorning`, the Notion transport, and the config schema are
+  untouched.
+
+### Files changed
+
+- `src/cli.ts`: `--dry-run` wired to `runMorning`'s new `dryRun` option;
+  output annotated; doctor now rejects `--dry-run`/`--no-record`; usage
+  string updated.
+- `src/workflow.ts`: `runMorning` takes `dryRun?: boolean`; ledger
+  construction is `record && !dryRun`; records now carry an explicit
+  `status: "success" | "failed"` field instead of relying on
+  presence-of-`plan` inference.
+- `src/domain.ts`: added `isoTimestamp` and `workflowRunSchema`, exported
+  `WorkflowRun` type.
+- `src/errors.ts`: `ErrorCode` is now `z.infer<typeof errorCodeSchema>`.
+- `src/ledger.ts`: `RunRecord` is now a discriminated union typed with the
+  real `Plan`; `record()` validates against `workflowRunSchema` as its first
+  statement, before `BEGIN IMMEDIATE`.
+- `docs/runtime.md`: rewrote the `--dry-run` bullet, added a note on the
+  workflow-run schema under "SQLite ledger location", replaced the stale
+  "known gap" troubleshooting row with the new `CONFIG` error row.
+- `tests/domain.test.ts`, `tests/workflow.test.ts`, `tests/cli.test.ts`: new
+  cases for the schema and the dry-run/doctor-rejection behavior.
+- `tests/ledger.test.ts` (new): exercises `RunLedger.record` directly with
+  deliberately invalid records (both `plan` and `errorCode`; neither) via a
+  type cast, and confirms the `runs`/`events` tables stay empty afterward.
+
+### Important implementation decisions
+
+1. **`--dry-run` and `--no-record` both suppress the ledger write; `--dry-run`
+   additionally marks output.** Considered making `--dry-run` an alias for
+   `--no-record` with no distinguishing behavior, but that would not give it
+   a genuinely different, checkable meaning. Instead `dryRun` is threaded
+   through `runMorning` as its own parameter that takes precedence over
+   `record`, and the CLI marks it in the output, so a script or a human can
+   tell "this run explicitly asserted no side effects" from "this run just
+   happened to skip recording."
+2. **The workflow-run schema treats `plan` as structurally opaque
+   (`z.record(z.string(), z.unknown())`), not a full re-specification of
+   `Plan`.** `Plan`'s own contents are already validated end to end by
+   `planMorning`/`snapshotSchema` before a record is ever built; duplicating
+   that shape in a second schema would be redundant and would drift the
+   moment `Plan` changes. The new schema's job is narrower and specific to
+   the bug being fixed: reject "both present" and "neither present," which a
+   bare TS interface with two optional fields could not do at runtime.
+3. **`errors.ts` gained a zod dependency it didn't have before.** `ErrorCode`
+   was a hand-written string union; `errorCodeSchema` needed a schema, not
+   just a type, so `errorCode` could be validated as part of the failure
+   branch. zod is already an approved runtime dependency repo-wide, so this
+   is not a new dependency, just a new import in one more file.
+4. **Doctor now rejects `--dry-run`/`--no-record` instead of continuing to
+   silently ignore them.** This was not explicitly named in the Slice 2.0
+   deliverables list, but it is the same defect class the slice exists to
+   fix ("no accepted option may be silently ignored"), it was a one-line,
+   low-risk addition, and leaving it would mean the slice fixed one instance
+   of the bug while leaving an identical one in place two lines away.
+
+### Tests run and outcomes
+
+All commands run from the worktree root on
+`feature/slice-2.0-foundation-consolidation`.
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | Pass |
+| `npm run lint` | Pass |
+| `npm test` | 70/70 pass (61 existing + 9 new: 1 workflow-run schema case group, 2 ledger direct-validation cases, 1 dry-run workflow case, 1 well-formed-record ledger case, 4 CLI dry-run/doctor-rejection cases) |
+| `npm run privacy:check` | Pass |
+| `npm run check` (chained) | Pass end to end |
+| `npm run build:public` | Pass, same allowlisted `.public/index.html` + `.public/data.json` output |
+| `npm run morning:plan -- --demo --json --dry-run --at 2026-09-18T09:00:00+10:00` | Exits 0, output JSON has `"dryRun": true`, `.runtime/` is never created |
+| `npm run doctor -- --demo --json` | Unchanged, still passes |
+| `node dist/src/cli.js doctor --demo --dry-run` and `... --no-record` | Both exit 2 with a `CONFIG` error naming the restriction |
+| Plain `plan --demo --at ...` (no dry-run) after the above | Still writes `.runtime/runs.sqlite` normally, confirming the fix didn't disable recording generally |
+| `git diff --check` | Clean |
+
+Node version: same as the gate-cleanup pass; no engine or dependency change
+in this slice.
+
+### Known limitations or unresolved issues
+
+None new. Everything named in the Slice 2.0 deliverables list is resolved
+and tested. The remaining open items from the prior handoff (per-company
+cadence decision, `.deep-research/` disposition) are unchanged and out of
+scope here.
+
+### Deviation from the supplied plan
+
+None. Implemented exactly the plan reviewed and approved before coding
+began (see the doctor-flag-rejection addition under "Important
+implementation decisions" above, which was flagged as a small, in-spirit
+extension rather than a silent scope change).
+
+### Recommended next step
+
+Review and merge the PR for this branch, then decide whether to proceed to
+Slice 2.1 (operational readiness: `status` command, `doctor` expansion,
+single-instance lock, stale-lock recovery, retention policy) per
+`CHATGPT_TO_CLAUDE_HANDOFF.md`. Per the handoff's operating rule, do not
+begin Slice 2.1 until this slice is explicitly approved.

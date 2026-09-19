@@ -1,17 +1,18 @@
 import { DatabaseSync } from "node:sqlite";
 import { chmodSync, existsSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
+import { workflowRunSchema, validate } from "./domain.js";
 import { AppError } from "./errors.js";
 import type { ErrorCode } from "./errors.js";
 import { digest, hash } from "./planner.js";
 import type { Plan } from "./planner.js";
 
-export interface RunRecord {
-  logicalKey: string;
-  observedAt: string;
-  plan?: Plan;
-  errorCode?: ErrorCode;
-}
+// Mirrors workflowRunSchema (src/domain.ts) but keeps `plan` typed as the
+// real Plan for callers; the schema itself treats plan as opaque and only
+// enforces that exactly one of plan/errorCode is present.
+export type RunRecord =
+  | {status: "success"; logicalKey: string; observedAt: string; plan: Plan}
+  | {status: "failed"; logicalKey: string; observedAt: string; errorCode: ErrorCode};
 
 export class RunLedger {
   private readonly db: DatabaseSync;
@@ -65,21 +66,26 @@ export class RunLedger {
   }
 
   record(record: RunRecord): void {
+    // Validated before any SQLite statement: an invalid or ambiguous record
+    // (both plan and errorCode, or neither) must never reach the ledger.
+    validate(workflowRunSchema, record, "Workflow run record");
     try {
       this.db.exec("BEGIN IMMEDIATE");
       const previous = this.db.prepare("SELECT revision, plan_hash FROM runs WHERE logical_key = ?").get(record.logicalKey);
-      const planHash = record.plan ? hash(record.plan) : null;
+      const planHash = record.status === "success" ? hash(record.plan) : null;
       const revision = Number(previous?.revision ?? 0) + (planHash && previous?.plan_hash !== planHash ? 1 : 0);
       this.db.prepare(`INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(logical_key) DO UPDATE SET status=excluded.status, observed_at=excluded.observed_at,
           revision=excluded.revision, plan_hash=excluded.plan_hash, plan_json=excluded.plan_json,
           digest=excluded.digest, error_code=excluded.error_code`).run(
-        record.logicalKey, record.plan ? "success" : "failed", record.observedAt, revision,
-        planHash, record.plan ? JSON.stringify(record.plan) : null, record.plan ? digest(record.plan) : null, record.errorCode ?? null,
+        record.logicalKey, record.status, record.observedAt, revision,
+        planHash, record.status === "success" ? JSON.stringify(record.plan) : null,
+        record.status === "success" ? digest(record.plan) : null,
+        record.status === "failed" ? record.errorCode : null,
       );
       // Events intentionally contain no target names, URLs, tokens, notes, or raw errors.
       this.db.prepare("INSERT INTO events (logical_key, observed_at, outcome, error_code) VALUES (?, ?, ?, ?)").run(
-        record.logicalKey, record.observedAt, record.plan ? "success" : "failed", record.errorCode ?? null,
+        record.logicalKey, record.observedAt, record.status, record.status === "failed" ? record.errorCode : null,
       );
       this.db.exec("COMMIT");
     } catch {

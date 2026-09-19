@@ -1,4 +1,7 @@
-export type ErrorCode = "CONFIG" | "SCHEMA" | "AUTH" | "NOTION" | "INPUT" | "STORAGE" | "POLICY";
+import { z } from "zod";
+
+export const errorCodeSchema = z.enum(["CONFIG", "SCHEMA", "AUTH", "NOTION", "INPUT", "STORAGE", "POLICY"]);
+export type ErrorCode = z.infer<typeof errorCodeSchema>;
 
 export class AppError extends Error {
   constructor(public readonly code: ErrorCode, message: string) {
