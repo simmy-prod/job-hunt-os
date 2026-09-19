@@ -12,9 +12,10 @@
 - One logical result per business day: a scheduled trigger skips quietly if
   the day's key already succeeded, if the configured time has not arrived in
   the business timezone, or if scheduling is disabled.
-- A single-run lease in the SQLite ledger (shared by manual recorded runs)
-  covering the full workflow including the Notion read, with stale-lease
-  recovery by dead PID or 30-minute age.
+- Scheduled runs reuse Slice 2.1's `.runtime/morning.lock` run lock (shared
+  with manual recorded runs), covering the success check and the Notion
+  read. A held lock makes a trigger report `busy` and exit 0; stale-lock
+  recovery is Slice 2.1's (dead PID or 6-hour age).
 - Failures are recorded (code only), retried by later triggers, and capped at
   3 scheduled attempts per day. Manual runs are never capped.
 - Scheduled runs read the standalone Notion token from the macOS login
@@ -27,12 +28,16 @@
 
 - New: `src/scheduler.ts`, `src/credentials.ts`, `tests/scheduler.test.ts`,
   `tests/credentials.test.ts`.
-- Changed: `src/cli.ts`, `src/config.ts` (optional `schedule` block,
-  excluded from the run-key hash), `src/ledger.ts` (schema v2: `invoker`,
-  `leases`, in-place v1 migration), `src/workflow.ts` (lease around recorded
-  runs), `src/errors.ts` (`LOCKED`, exit 5), `scripts/check-boundaries.mjs`,
-  `tests/cli.test.ts`, `tests/privacy.test.ts`, `templates/runtime-config.json`,
-  `package.json` (`schedule` script), `docs/runtime.md`, `README.md`.
+- Changed: `src/cli.ts` (`schedule` subcommands beside `plan`, `doctor`,
+  `status`), `src/config.ts` (optional `schedule` block and
+  `planningConfig`, which keeps the block out of the run-key hash),
+  `src/ledger.ts` (schema v2: `events.invoker`, in-place v1 migration,
+  `latestStatus`, `failedAttempts`, read-only `readScheduledFailures`),
+  `src/lock.ts` (read-only `inspectLock`), `src/workflow.ts` (shared
+  `executeRun`, `logicalKey`), `scripts/check-boundaries.mjs`,
+  `tests/cli.test.ts`, `tests/privacy.test.ts`,
+  `templates/runtime-config.json`, `package.json` (`schedule` script),
+  `docs/runtime.md`, `README.md`.
 
 ### Important technical decisions
 
@@ -46,31 +51,39 @@
 3. An hourly `StartInterval` was added on top of `RunAtLoad` + calendar time.
    It is a no-op after the day succeeds, and it is the in-day retry path and
    the fix for a system timezone that differs from `Australia/Melbourne`.
-4. The lease was pulled forward from Slice 2.1 because this slice's own
-   duplicate-run acceptance criteria need it.
+4. No second lock. The first version of this branch predated Slices 2.0 and
+   2.1 and carried its own SQLite lease; after they merged, that lease was
+   removed and the scheduler now uses Slice 2.1's file lock, ledger record
+   validation, and retention unchanged.
+5. `logicalKeyPrefix` now hashes only the planning fields (`schemaVersion`,
+   `timezone`, `source`). For a config with no `schedule` block the key is
+   byte-identical to before, so existing ledger history and `status` are
+   unaffected.
 
 ### Tests run and results
 
-- `npm run check`: pass (typecheck, lint, 104 of 104 tests, privacy check).
+- `npm run check`: pass (typecheck, lint, 140 of 140 tests, merged with Slices 2.0 and 2.1, privacy check).
 - `npm run build:public`: pass, `.public/` holds only `index.html` and `data.json`.
 - `git diff --check`: clean.
 - Scheduler tests cover duplicate triggers, simultaneous triggers, manual vs
-  scheduled races, crashed-process and aged lease recovery, v1 ledger
+  scheduled races, crashed-process and aged lock recovery, v1 ledger
   migration, Melbourne midnight, both DST transitions, business-timezone
   gating independent of system timezone, failure recording, retry, the
   3-attempt cap, credential and raw-error redaction, the read-only Notion
   operations, disabled scheduling, plist content, and install/uninstall in
   temporary directories only.
 - Manual end to end (fictional fixture config): first run succeeded,
-  duplicate was silent, three parallel triggers produced one success, one
-  `busy`, one `already_succeeded`, and a malformed source produced a redacted
-  failure with exit 2. The generated plist passed `plutil -lint`. No real
+  duplicate was silent, three parallel triggers produced one success and two
+  `busy`, a manual `plan` against a held lock exited 5 while a scheduled
+  trigger reported `busy` with exit 0, a malformed source produced a redacted
+  failure with exit 2, and Slice 2.1's `status` reported the scheduled
+  failure. The generated plist passed `plutil -lint`. No real
   LaunchAgent was installed and the real Keychain was never written.
 
 ### Known limitations or unresolved issues
 
-- Slices 2.0 and 2.1 are not merged. The general `status` command, expanded
-  `doctor`, log retention, and the `--dry-run` no-op flag remain open.
+- `.runtime/logs/scheduler.log` is not rotated (Slice 2.1 retention covers
+  the SQLite ledger only). It gets about one line per day, so this is low risk.
 - Not yet exercised under real launchd or with the real Keychain token; that
   needs Simmy to run the setup steps in `docs/runtime.md`.
 - The plist pins the absolute Node binary (a versioned Homebrew path on this
@@ -216,12 +229,8 @@ just locally exercised on 26.
 4. `.deep-research/` left untracked. If that research trail should be
    preserved in the repo, it needs an explicit decision and a separate commit;
    it was not folded into this slice.
-5. The CLI accepts `--dry-run` but the flag currently has no effect (it is
-   parsed and then ignored in `src/cli.ts`). Not fixed in this cleanup pass;
-   it is explicitly scoped to Slice 2.0 ("no accepted option may be silently
-   ignored"). Documented as a known gap in `docs/runtime.md`'s
-   troubleshooting table so it isn't mistaken for a working safety flag in
-   the meantime.
+5. ~~The CLI accepts `--dry-run` but the flag currently has no effect.~~
+   **Resolved in Slice 2.0.** See the dedicated section below.
 
 ## Deviation from the supplied plan
 
@@ -247,8 +256,309 @@ the handoff and the approved plan exactly.
 5. ~~Confirm Node 24 compatibility via the CI run on the pushed branch.~~ Done:
    CI passed on both Node 24 and Node 26.
 6. ~~Merge PR #5 once reviewed.~~ Done: PR #5 is merged into `master`.
-7. This mandatory-gate cleanup itself (correcting the merged-state record,
-   resolving the Node 24 status, adding `docs/runtime.md`, and removing the
-   private Notion data source ID from both handoff documents) is its own
-   branch and PR, opened after PR #5 and PR #6. Review and merge that before
-   starting Slice 2.0.
+7. ~~This mandatory-gate cleanup itself...~~ Done: merged as PR #8.
+
+---
+
+## Slice 2.0: foundation consolidation
+
+Branch `feature/slice-2.0-foundation-consolidation`, created fresh from
+`origin/master` at `baf6e34` (the merged gate-cleanup commit). Scope per
+`CHATGPT_TO_CLAUDE_HANDOFF.md`'s Slice 2.0 deliverables: resolve the
+`--dry-run` no-op, add the missing workflow-run domain schema, keep
+everything else read-only and unchanged.
+
+### Summary
+
+- `--dry-run` now has a real, tested effect: it prevents the CLI from ever
+  constructing a `RunLedger`, wins over `--no-record`/`record: true` if both
+  are somehow set, and visibly marks its own output (`dryRun: true` in JSON,
+  a "Dry run: nothing written to the ledger" line in text) so it is
+  distinguishable from a plain `--no-record` invocation in logs or scripts.
+- `--dry-run` and `--no-record` are now rejected with a `CONFIG` error if
+  passed to `doctor`, which never wrote to the ledger to begin with and was
+  silently accepting both flags there (the same "accepted option, no effect"
+  bug as `--dry-run` itself had for `plan`).
+- Added `workflowRunSchema` (`src/domain.ts`): a discriminated union on
+  `status` requiring exactly one of `plan` (success) or `errorCode` (failed).
+  `RunLedger.record` validates every record against it before opening the
+  SQLite transaction, so an ambiguous or incomplete record fails without
+  touching the database. `errors.ts`'s `ErrorCode` is now backed by a zod
+  enum (`errorCodeSchema`) instead of a hand-written union, as the single
+  source of truth the new schema reads from.
+- No scheduler, Notion write, job-board access, or business-logic change of
+  any kind. `planMorning`, the Notion transport, and the config schema are
+  untouched.
+
+### Files changed
+
+- `src/cli.ts`: `--dry-run` wired to `runMorning`'s new `dryRun` option;
+  output annotated; doctor now rejects `--dry-run`/`--no-record`; usage
+  string updated.
+- `src/workflow.ts`: `runMorning` takes `dryRun?: boolean`; ledger
+  construction is `record && !dryRun`; records now carry an explicit
+  `status: "success" | "failed"` field instead of relying on
+  presence-of-`plan` inference.
+- `src/domain.ts`: added `isoTimestamp` and `workflowRunSchema`, exported
+  `WorkflowRun` type.
+- `src/errors.ts`: `ErrorCode` is now `z.infer<typeof errorCodeSchema>`.
+- `src/ledger.ts`: `RunRecord` is now a discriminated union typed with the
+  real `Plan`; `record()` validates against `workflowRunSchema` as its first
+  statement, before `BEGIN IMMEDIATE`.
+- `docs/runtime.md`: rewrote the `--dry-run` bullet, added a note on the
+  workflow-run schema under "SQLite ledger location", replaced the stale
+  "known gap" troubleshooting row with the new `CONFIG` error row.
+- `tests/domain.test.ts`, `tests/workflow.test.ts`, `tests/cli.test.ts`: new
+  cases for the schema and the dry-run/doctor-rejection behavior.
+- `tests/ledger.test.ts` (new): exercises `RunLedger.record` directly with
+  deliberately invalid records (both `plan` and `errorCode`; neither) via a
+  type cast, and confirms the `runs`/`events` tables stay empty afterward.
+
+### Important implementation decisions
+
+1. **`--dry-run` and `--no-record` both suppress the ledger write; `--dry-run`
+   additionally marks output.** Considered making `--dry-run` an alias for
+   `--no-record` with no distinguishing behavior, but that would not give it
+   a genuinely different, checkable meaning. Instead `dryRun` is threaded
+   through `runMorning` as its own parameter that takes precedence over
+   `record`, and the CLI marks it in the output, so a script or a human can
+   tell "this run explicitly asserted no side effects" from "this run just
+   happened to skip recording."
+2. **The workflow-run schema treats `plan` as structurally opaque
+   (`z.record(z.string(), z.unknown())`), not a full re-specification of
+   `Plan`.** `Plan`'s own contents are already validated end to end by
+   `planMorning`/`snapshotSchema` before a record is ever built; duplicating
+   that shape in a second schema would be redundant and would drift the
+   moment `Plan` changes. The new schema's job is narrower and specific to
+   the bug being fixed: reject "both present" and "neither present," which a
+   bare TS interface with two optional fields could not do at runtime.
+3. **`errors.ts` gained a zod dependency it didn't have before.** `ErrorCode`
+   was a hand-written string union; `errorCodeSchema` needed a schema, not
+   just a type, so `errorCode` could be validated as part of the failure
+   branch. zod is already an approved runtime dependency repo-wide, so this
+   is not a new dependency, just a new import in one more file.
+4. **Doctor now rejects `--dry-run`/`--no-record` instead of continuing to
+   silently ignore them.** This was not explicitly named in the Slice 2.0
+   deliverables list, but it is the same defect class the slice exists to
+   fix ("no accepted option may be silently ignored"), it was a one-line,
+   low-risk addition, and leaving it would mean the slice fixed one instance
+   of the bug while leaving an identical one in place two lines away.
+
+### Tests run and outcomes
+
+All commands run from the worktree root on
+`feature/slice-2.0-foundation-consolidation`.
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | Pass |
+| `npm run lint` | Pass |
+| `npm test` | 70/70 pass (61 existing + 9 new: 1 workflow-run schema case group, 2 ledger direct-validation cases, 1 dry-run workflow case, 1 well-formed-record ledger case, 4 CLI dry-run/doctor-rejection cases) |
+| `npm run privacy:check` | Pass |
+| `npm run check` (chained) | Pass end to end |
+| `npm run build:public` | Pass, same allowlisted `.public/index.html` + `.public/data.json` output |
+| `npm run morning:plan -- --demo --json --dry-run --at 2026-09-18T09:00:00+10:00` | Exits 0, output JSON has `"dryRun": true`, `.runtime/` is never created |
+| `npm run doctor -- --demo --json` | Unchanged, still passes |
+| `node dist/src/cli.js doctor --demo --dry-run` and `... --no-record` | Both exit 2 with a `CONFIG` error naming the restriction |
+| Plain `plan --demo --at ...` (no dry-run) after the above | Still writes `.runtime/runs.sqlite` normally, confirming the fix didn't disable recording generally |
+| `git diff --check` | Clean |
+
+Node version: same as the gate-cleanup pass; no engine or dependency change
+in this slice.
+
+### Known limitations or unresolved issues
+
+None new. Everything named in the Slice 2.0 deliverables list is resolved
+and tested. The remaining open items from the prior handoff (per-company
+cadence decision, `.deep-research/` disposition) are unchanged and out of
+scope here.
+
+### Deviation from the supplied plan
+
+None. Implemented exactly the plan reviewed and approved before coding
+began (see the doctor-flag-rejection addition under "Important
+implementation decisions" above, which was flagged as a small, in-spirit
+extension rather than a silent scope change).
+
+### Recommended next step
+
+Review and merge the PR for this branch, then decide whether to proceed to
+Slice 2.1 (operational readiness: `status` command, `doctor` expansion,
+single-instance lock, stale-lock recovery, retention policy) per
+`CHATGPT_TO_CLAUDE_HANDOFF.md`. Per the handoff's operating rule, do not
+begin Slice 2.1 until this slice is explicitly approved.
+
+---
+
+## Slice 2.1: operational readiness
+
+Branch `feature/slice-2.1-operational-readiness`. Started from `origin/master`
+at `baf6e34` (the gate-cleanup commit); Slice 2.0 (PR #9) landed on
+`origin/master` partway through this session, so the branch was rebased onto
+it (`c793de1`) before continuing; conflicts were limited to `src/errors.ts`
+(both slices touched `ErrorCode`) and `src/workflow.ts` (both touched
+`runMorning`'s options), resolved by keeping Slice 2.0's `errorCodeSchema`/
+`dryRun` behavior and layering this slice's lock/retention additions on top.
+Scope per the task brief and `CHATGPT_TO_CLAUDE_HANDOFF.md`'s Slice 2.1
+deliverables: make the planner observable and safe to run unattended, with
+no scheduler, Notion write, job-board discovery, or new runtime dependency.
+
+### Summary
+
+- **`status` command** (`src/cli.ts`, reading `RunLedger.readLatest` in
+  `src/ledger.ts`): reports `never_run` / `success` / `failed` / `stale` for
+  the current configuration by reading only the local ledger (no source
+  read, no Notion call, no lock). Never creates `.runtime` as a side effect of
+  running. Output never includes business data (`plan_json`/`digest`), only
+  `{state, date, timezone, latestRunDate, revision, errorCode}`.
+- **`doctor` expansion** (`src/doctor.ts`, new): restructured into five
+  independent checks (`node`, `runtimeDir`, `gitignore`, `config`, `source`)
+  that each catch their own errors, so a broken config no longer hides
+  whether Node/permissions/gitignore are fine. The report shape changed from
+  `{status: "ok", ...}` to `{ok, worstCode, checks: {...}, counts, warning}`;
+  the one existing test asserting the old shape was updated, nothing else
+  referenced it.
+- **Single-instance lock** (`src/lock.ts`, new): `acquireLock` wraps the
+  complete `runMorning` body (remote read included), using an `O_EXCL`-
+  created `.runtime/morning.lock` file. Engaged exactly when the ledger
+  itself would be touched (`record && !dryRun`), so `--no-record`/`--dry-run`
+  keep their existing zero-footprint guarantee. Stale-lock recovery: a dead
+  `pid` (`ESRCH` from `process.kill(pid, 0)`) or an age over 6 hours (guards
+  `pid` reuse) is deleted and acquisition retried once; otherwise a `LOCKED`
+  error (new exit code `5`) is thrown rather than blocking silently. Release
+  re-checks the lock's `token` before unlinking, so it can never delete a
+  lock a different process has since legitimately acquired.
+- **Ledger retention** (`src/ledger.ts`): `record()` now prunes `runs` rows
+  older than 90 days and `events` rows older than 180 days, by `observedAt`,
+  in the same transaction as the write: atomic, no new command or schedule.
+- New `ErrorCode` value `"LOCKED"`; `exitCodeFor` (`src/errors.ts`) is now the
+  single shared exit-code mapping used by both the top-level CLI error
+  handler and `doctor`'s own (non-throwing) exit-code selection.
+
+### Files changed
+
+- `src/lock.ts` (new): `acquireLock`/stale-lock recovery/token-checked release.
+- `src/doctor.ts` (new): `checkNodeVersion`, `checkRuntimeDir`, `checkGitignore`,
+  and `runDoctorReport`, which aggregates them plus the existing source-read/
+  schema-validate/plan flow.
+- `src/ledger.ts`: added `RunLedger.readLatest` (read-only static, never
+  creates `.runtime`/the db file) and retention pruning inside `record()`.
+- `src/workflow.ts`: `runMorning` now acquires/releases the lock around its
+  body; added `logicalKeyPrefix(config)` (shared by `runMorning` and `status`
+  so the two never compute the prefix differently).
+- `src/errors.ts`: added `"LOCKED"` to `errorCodeSchema`; added `exitCodeFor`.
+- `src/cli.ts`: added the `status` command; `doctor` now builds its report via
+  `runDoctorReport` and prints-then-sets-exit-code instead of throwing (the
+  one deliberate deviation from the plan/status throw-once contract, so a
+  diagnostic command shows everything that did and didn't pass, not just the
+  first failure); `--dry-run`/`--no-record` rejection extended from
+  `doctor`-only to `doctor`-or-`status`; usage string updated.
+- `docs/runtime.md`: documented `status`, the expanded `doctor` checks, a new
+  "Concurrency and the run lock" section, the retention policy, the `LOCKED`
+  exit code, and new troubleshooting rows.
+- `tests/lock.test.ts` (new): acquire/release, concurrent-acquisition
+  `LOCKED`, stale recovery via a real dead `pid` (spawn-then-exit, not a
+  magic number), age-based staleness, token-checked release, symlink refusal.
+- `tests/doctor.test.ts` (new): each check function in isolation, plus
+  `runDoctorReport` aggregation (config failure still runs the other checks;
+  a source/schema failure surfaces `worstCode` without hiding `config: ok`).
+- `tests/ledger.test.ts`: added retention pruning (a hand-inserted 2020 row
+  is gone after the next `record()`) and `readLatest` cases (never-run
+  without creating `.runtime`, prefix filtering across two different config
+  hashes, symlinked-ledger refusal).
+- `tests/cli.test.ts`: updated the doctor-shape assertion for the new report;
+  extended the dry-run/no-record rejection loop to cover `status`; added
+  `status` end-to-end cases (never-run → success → stale → failed, driven
+  through real `plan`/`status` invocations against a temp config) and a
+  text-mode `status` case.
+
+### Important implementation decisions
+
+1. **The lock does not cover `doctor`.** `doctor` was already documented as
+   never touching the ledger "by design"; extending the lock to it would
+   contradict that existing contract for no operational benefit, since
+   nothing a scheduler runs unattended calls `doctor`. Recorded explicitly in
+   `docs/runtime.md` rather than left implicit.
+2. **`status` parses the business date out of the existing `logicalKey`
+   string rather than adding a ledger schema column.** `morning-plan:v1:
+   <hash>:<date>` already ends in an unambiguous date segment (the hash is
+   hex, the date is `YYYY-MM-DD`, neither contains `:`), so `readLatest` and
+   `status` split on `:` and take the last segment instead of bumping
+   `PRAGMA user_version` and writing a migration for one derived field.
+3. **`doctor`'s report shape changed rather than being wrapped to preserve
+   the old `{status: "ok"}` field.** Doctor's JSON output has no consumer
+   outside this repo's own tests (checked: no script, doc example, or other
+   file parses it), so this was a clean rename rather than a compatibility
+   shim for an API with no external caller.
+4. **Stale-lock recovery uses both `pid` liveness and a 6-hour age cutoff,
+   not just one.** `pid` liveness alone is vulnerable to `pid` reuse after a
+   crash; age alone would falsely reclaim a lock from an unusually slow but
+   genuinely running process. Combining them (stale if either condition
+   holds) was chosen over configurability, since a single Notion-database
+   read/plan/write should never legitimately approach 6 hours.
+5. **Retention is unconditional inside `record()`, not a separate `--prune`
+   flag or command.** The deliverables ask to "define retention," and an
+   opt-in prune command would need someone to remember to run it, and the whole
+   point of this slice is removing things an unattended run must not depend
+   on a human remembering to do.
+
+### Tests run and outcomes
+
+All commands run from the worktree root on
+`feature/slice-2.1-operational-readiness`, after rebasing onto Slice 2.0.
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | Pass |
+| `npm run lint` | Pass |
+| `npm test` | 96/96 pass (70 existing + 26 new: 6 lock tests, 12 doctor tests, 4 ledger tests, retention plus 3 `readLatest` cases, 4 CLI `status`/rejection cases) |
+| `npm run privacy:check` | Pass (confirmed `src/lock.ts`/`src/doctor.ts` use only already-allowlisted imports: `node:fs`, `node:path`, `node:crypto`, `zod`, no `node:child_process`) |
+| `npm run check` (chained) | Pass end to end |
+| `npm run build:public` | Pass, same allowlisted `.public/index.html` + `.public/data.json` output |
+| `git diff --check` | Clean |
+| Manual: `doctor --demo --json` in a scratch directory | `{"ok": true, ...}` with all five checks passing against the real repo (`.runtime`/`.gitignore` checks always run against the repository root, matching the ledger's existing root-relative behavior, not the invoking `cwd`) |
+| Manual: `status --demo --json` before any run, after a `--no-record` run, and after a recorded run | `never_run` → `never_run` (unchanged, confirming `--no-record` still leaves no trace) → `success` with `revision: 1` |
+| Privacy/runtime-boundary check | Ran `npm run privacy:check` explicitly (see above) and re-read `scripts/check-boundaries.mjs`'s `allowedImports` against both new source files by hand |
+
+One local cleanup note: the manual smoke test above was run once against the
+actual worktree root (not a scratch copy) before its `.runtime/` and
+`.public/` output were deleted with `rm -rf` prior to committing; both are
+gitignored and were never staged, but noted here for transparency since nothing
+outside this session's own throwaway artifacts was touched.
+
+Node version: same as prior slices (v26.7.0 locally; CI covers 24 and 26). No
+engine or dependency change in this slice.
+
+### Known limitations or unresolved issues
+
+- `status` has no `npm run` script alias (only `doctor`/`morning:plan` do,
+  per the existing `package.json`); it is invoked directly as
+  `node dist/src/cli.js status ...`, documented as such in `docs/runtime.md`.
+  Adding an `npm run status` alias is a one-line `package.json` change if
+  wanted, left out here since it wasn't asked for and is easy to add later.
+- The 90-day/180-day retention windows and the 6-hour lock-staleness window
+  are fixed constants (`src/ledger.ts`, `src/lock.ts`), not configurable via
+  `targets/runtime.json`. Nothing in the deliverables asked for
+  configurability, and adding it would be scope beyond "define retention."
+- Everything else named in the Slice 2.1 deliverables list (`status`,
+  expanded `doctor`, single-instance lock, stale-lock recovery, retention) is
+  implemented and tested. No scheduler, Notion write, or job-board access was
+  added, per the continuation constraints.
+
+### Deviation from the supplied plan
+
+One, flagged and reasoned through during implementation rather than
+discovered after the fact: `doctor`'s exit-and-output handling now
+prints-then-sets-`process.exitCode` instead of throwing through the shared
+`main().catch()` handler, so a partially-failing report is still fully
+printed to stdout. `plan` and `status` keep the original throw-once, stderr-
+only-on-failure contract. This was in the reviewed plan under "doctor
+expansion," not an undocumented change.
+
+### Recommended next step
+
+Review and merge the PR for this branch. Slice 2.2 (macOS scheduling and
+recovery) requires an Opus planning/design review per
+`CHATGPT_TO_CLAUDE_HANDOFF.md`'s operating rule (credential loading via
+Keychain, LaunchAgent generation) before any Sonnet implementation begins;
+do not start Slice 2.2 implementation directly from this handoff.

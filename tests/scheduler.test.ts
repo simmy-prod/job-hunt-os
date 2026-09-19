@@ -7,11 +7,12 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Config } from "../src/config.js";
 import { AppError } from "../src/errors.js";
-import { RunLedger } from "../src/ledger.js";
+import { acquireLock } from "../src/lock.js";
 import { createNotionReader, NotionSnapshotSource } from "../src/notion.js";
 import { installLaunchAgent, LAUNCH_AGENT_LABEL, launchAgentPath, localTime, MAX_SCHEDULED_FAILURES, renderLaunchAgent,
   runScheduled, scheduleStatus, uninstallLaunchAgent, validateLaunchAgentPaths } from "../src/scheduler.js";
-import { LEASE_TTL_MS, logicalKey, runMorning } from "../src/workflow.js";
+import { hash } from "../src/planner.js";
+import { logicalKey, logicalKeyPrefix, runMorning } from "../src/workflow.js";
 import { batch, config, metadata, notionConfig, page, snapshot } from "./helpers.js";
 
 const temporary = (prefix = "job-hunt-scheduler-") => mkdtempSync(join(tmpdir(), prefix));
@@ -33,6 +34,11 @@ function deadPid(): number {
   assert.ok(child.pid);
   return child.pid;
 }
+// Leaves a Slice 2.1 lock file behind, as a crashed or still-running process would.
+function leaveLock(root: string, pid: number, startedAt = Date.now()): void {
+  acquireLock(root).release();
+  writeFileSync(join(root, ".runtime/morning.lock"), JSON.stringify({pid, startedAt, token: "left-behind"}));
+}
 
 // Duplicate execution
 test("a second trigger on the same business day does not contact the source again", async () => {
@@ -44,7 +50,7 @@ test("a second trigger on the same business day does not contact the source agai
   assert.equal(state.reads, 1);
   assert.deepEqual(query(root, "SELECT outcome, invoker FROM events"), [{outcome: "success", invoker: "scheduled"}]);
   assert.deepEqual(query(root, "SELECT count(*) AS n FROM runs"), [{n: 1}]);
-  assert.deepEqual(query(root, "SELECT count(*) AS n FROM leases"), [{n: 0}]);
+  assert.equal(existsSync(join(root, ".runtime/morning.lock")), false);
 });
 test("simultaneous triggers produce one active workflow and one logical result", async () => {
   const root = temporary(); let reads = 0; let open!: () => void;
@@ -64,7 +70,7 @@ test("a manual recorded run cannot race an active scheduled run", async () => {
   const scheduledRun = runScheduled({config: scheduled, root, clock: at(due),
     source: () => ({read: async () => { await gate; return snapshot(); }})});
   await assert.rejects(runMorning({config: scheduled, source: counter().source, root, clock: at(due), record: true}),
-    (error: AppError) => error.code === "LOCKED" && /in progress/.test(error.message));
+    (error: AppError) => error.code === "LOCKED" && /holds the lock/.test(error.message));
   open(); await scheduledRun;
   // Lock-free reads that record nothing still work alongside.
   await runMorning({config: scheduled, source: counter().source, root, clock: at(due), record: false});
@@ -82,38 +88,28 @@ test("editing the schedule never forks the logical run key", () => {
   assert.ok(_schedule);
   assert.equal(logicalKey(scheduled, due), logicalKey(changed, due));
   assert.equal(logicalKey(scheduled, due), logicalKey(unscheduled, due));
+  // Existing configs (no schedule block) keep the exact pre-scheduler key, so history survives.
+  assert.equal(logicalKeyPrefix(unscheduled), `morning-plan:v1:${hash(unscheduled)}:`);
 });
 
-// Restart and recovery
-test("a lease left by a crashed or rebooted process is recovered", async () => {
-  const root = temporary(); const crashed = deadPid();
-  const ledger = new RunLedger(root);
-  assert.ok(ledger.acquire({now: new Date(), pid: crashed, ttlMs: LEASE_TTL_MS, isAlive: () => true}));
-  ledger.close();
+// Restart and recovery (the lock is the Slice 2.1 file lock, shared with manual runs)
+test("a lock left by a crashed or rebooted process is recovered", async () => {
+  const root = temporary(); leaveLock(root, deadPid());
   const {state, source} = counter();
   assert.equal((await runScheduled({config: scheduled, source, root, clock: at(due)})).outcome, "success");
   assert.equal(state.reads, 1);
-  assert.deepEqual(query(root, "SELECT count(*) AS n FROM leases"), [{n: 0}]);
+  assert.equal(existsSync(join(root, ".runtime/morning.lock")), false);
 });
-test("a lease held by a live process is respected until it exceeds the age limit", async () => {
-  const root = temporary(); const taken = new Date("2026-09-18T22:00:00Z");
-  const ledger = new RunLedger(root);
-  assert.ok(ledger.acquire({now: taken, pid: 4242, ttlMs: LEASE_TTL_MS, isAlive: () => true}));
-  ledger.close();
-  const alive = () => true;
-  const fresh = {now: () => new Date(taken.getTime() + LEASE_TTL_MS - 1000)};
-  const old = {now: () => new Date(taken.getTime() + LEASE_TTL_MS + 1000)};
-  assert.equal((await runScheduled({config: scheduled, source: counter().source, root, clock: at(due), wallClock: fresh, isAlive: alive})).outcome, "busy");
-  assert.equal((await runScheduled({config: scheduled, source: counter().source, root, clock: at(due), wallClock: old, isAlive: alive})).outcome, "success");
+test("a lock held by a live process is respected until it exceeds the age limit", async () => {
+  const fresh = temporary(); leaveLock(fresh, process.pid);
+  assert.equal((await runScheduled({config: scheduled, source: counter().source, root: fresh, clock: at(due)})).outcome, "busy");
+  const aged = temporary(); leaveLock(aged, process.pid, Date.now() - 7 * 60 * 60 * 1000);
+  assert.equal((await runScheduled({config: scheduled, source: counter().source, root: aged, clock: at(due)})).outcome, "success");
 });
 test("a run interrupted before recording leaves no success, so the next trigger reruns it", async () => {
-  const root = temporary();
-  // Simulate a crash mid-read: the lease is taken, nothing is recorded, the process is gone.
-  const ledger = new RunLedger(root);
-  ledger.acquire({now: new Date(), pid: deadPid(), ttlMs: LEASE_TTL_MS, isAlive: () => true});
-  ledger.close();
+  const root = temporary(); leaveLock(root, deadPid());
   const status = scheduleStatus({config: scheduled, root, now: due, plistPath: join(root, "none.plist"), expectedPlist: null, systemTimezone: "Australia/Melbourne"});
-  assert.equal(status.today, "never_run"); assert.equal(status.lease, "stale");
+  assert.equal(status.today, "never_run"); assert.equal(status.lock, "stale");
   const {state, source} = counter();
   assert.equal((await runScheduled({config: scheduled, source, root, clock: at(due)})).outcome, "success");
   assert.equal(state.reads, 1);
@@ -292,7 +288,7 @@ test("uninstall never deletes a file it does not own, and install refuses a syml
 test("status reports states and codes only, never plan contents", async () => {
   const root = temporary();
   const before = scheduleStatus({config: scheduled, root, now: due, plistPath: join(root, "none.plist"), expectedPlist: null, systemTimezone: "Australia/Melbourne"});
-  assert.equal(before.today, "never_run"); assert.equal(before.installed, false); assert.equal(before.lease, "free");
+  assert.equal(before.today, "never_run"); assert.equal(before.installed, false); assert.equal(before.lock, "free");
   assert.equal(existsSync(join(root, ".runtime")), false);
   await runScheduled({config: scheduled, source: counter().source, root, clock: at(due)});
   const after = scheduleStatus({config: scheduled, root, now: due, plistPath: join(root, "none.plist"), expectedPlist: null, systemTimezone: "Australia/Melbourne"});

@@ -3,10 +3,12 @@ import { isAbsolute, join } from "node:path";
 import type { Config } from "./config.js";
 import { AppError, safeError } from "./errors.js";
 import type { ErrorCode } from "./errors.js";
-import { inspectLedger, leaseIsStale, processIsAlive, RunLedger } from "./ledger.js";
+import { RunLedger } from "./ledger.js";
+import { acquireLock, inspectLock } from "./lock.js";
+import type { Lock } from "./lock.js";
 import { businessDate } from "./planner.js";
 import type { Plan } from "./planner.js";
-import { acquireLease, executeRun, LEASE_TTL_MS, logicalKey } from "./workflow.js";
+import { executeRun, logicalKey } from "./workflow.js";
 import type { RunOptions } from "./workflow.js";
 
 export const LAUNCH_AGENT_LABEL = "local.job-hunt-os.morning-plan";
@@ -38,20 +40,23 @@ export async function runScheduled(options: RunOptions): Promise<ScheduledResult
   if (!config.schedule?.enabled) return {outcome: "disabled", date};
   if (localTime(now, config.timezone) < config.schedule.time) return {outcome: "not_due", date};
   const key = logicalKey(config, now);
-  const ledger = new RunLedger(options.root);
+  // The same single-instance lock as manual recorded runs, covering the remote read.
+  let lock: Lock;
+  try { lock = acquireLock(options.root); }
+  catch (error) {
+    if (error instanceof AppError && error.code === "LOCKED") return {outcome: "busy", date};
+    throw error;
+  }
+  let ledger: RunLedger | undefined;
   try {
-    const lease = acquireLease(ledger, options);
-    if (!lease) return {outcome: "busy", date};
-    try {
-      if (ledger.latest(key)?.status === "success") return {outcome: "already_succeeded", date};
-      if (ledger.failedAttempts(key, "scheduled") >= MAX_SCHEDULED_FAILURES) return {outcome: "attempts_exhausted", date};
-      try { return {outcome: "success", date, plan: await executeRun(ledger, options, now, "scheduled")}; }
-      catch (error) { return {outcome: "failed", date, errorCode: safeError(error).code}; }
-    } finally {
-      ledger.release(lease);
-    }
+    ledger = new RunLedger(options.root);
+    if (ledger.latestStatus(key) === "success") return {outcome: "already_succeeded", date};
+    if (ledger.failedAttempts(key, "scheduled") >= MAX_SCHEDULED_FAILURES) return {outcome: "attempts_exhausted", date};
+    try { return {outcome: "success", date, plan: await executeRun(ledger, options, now, "scheduled")}; }
+    catch (error) { return {outcome: "failed", date, errorCode: safeError(error).code}; }
   } finally {
-    ledger.close();
+    ledger?.close();
+    lock.release();
   }
 }
 
@@ -190,14 +195,17 @@ export interface ScheduleStatus {
   revision: number | null;
   errorCode: string | null;
   scheduledFailures: number;
-  lease: "free" | "held" | "stale";
+  lock: "free" | "held" | "stale";
 }
 
 // Read-only: reports only dates, counts, states, and error codes, never plan contents.
 export function scheduleStatus(options: {config: Config; root: string; now: Date; plistPath: string; expectedPlist: string | null;
-  systemTimezone: string; isAlive?: (pid: number) => boolean;}): ScheduleStatus {
+  systemTimezone: string;}): ScheduleStatus {
   const {config, now} = options;
-  const view = inspectLedger(options.root, logicalKey(config, now));
+  const key = logicalKey(config, now);
+  const latest = RunLedger.readLatest(options.root, key);
+  const view = {latest: latest?.logicalKey === key ? latest : undefined,
+    scheduledFailures: RunLedger.readScheduledFailures(options.root, key)};
   const installed = lstatExists(options.plistPath);
   const plainFile = installed && lstatSync(options.plistPath).isFile();
   const today = !view.latest ? "never_run" : view.latest.status === "success" ? "success"
@@ -218,7 +226,6 @@ export function scheduleStatus(options: {config: Config; root: string; now: Date
     revision: view.latest?.revision ?? null,
     errorCode: view.latest?.errorCode ?? null,
     scheduledFailures: view.scheduledFailures,
-    lease: !view.lease ? "free" : leaseIsStale(view.lease, {now: new Date(), pid: process.pid, ttlMs: LEASE_TTL_MS,
-      isAlive: options.isAlive ?? processIsAlive}) ? "stale" : "held",
+    lock: inspectLock(options.root),
   };
 }

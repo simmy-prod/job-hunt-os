@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { configSchema } from "../src/config.js";
-import { applicationSchema, listingSchema, matchDecisionSchema, snapshotSchema, targetSchema, validate } from "../src/domain.js";
+import { applicationSchema, listingSchema, matchDecisionSchema, snapshotSchema, targetSchema, validate, workflowRunSchema } from "../src/domain.js";
 import { config, snapshot } from "./helpers.js";
 
 test("synthetic domain contracts cover target, application, listing, and decision", () => {
@@ -32,6 +32,17 @@ test("rejects unknown configuration keys, invalid timezone, frequency and identi
   assert.equal(configSchema.safeParse({...config, apiKey: "private"}).success, false);
   assert.equal(targetSchema.safeParse({...snapshot().targets[0], checkFrequency: "monthly"}).success, false);
   assert.equal(targetSchema.safeParse({...snapshot().targets[0], id: "../private"}).success, false);
+});
+test("workflow-run schema accepts exactly one of plan/errorCode and rejects ambiguity", () => {
+  const base = {logicalKey: "morning-plan:v1:abc123:2026-09-18", observedAt: "2026-09-18T00:00:00.000Z"};
+  assert.ok(workflowRunSchema.safeParse({...base, status: "success", plan: {counts: {}}}).success);
+  assert.ok(workflowRunSchema.safeParse({...base, status: "failed", errorCode: "NOTION"}).success);
+  assert.equal(workflowRunSchema.safeParse({...base, status: "success", plan: {counts: {}}, errorCode: "NOTION"}).success, false);
+  assert.equal(workflowRunSchema.safeParse({...base, status: "success"}).success, false);
+  assert.equal(workflowRunSchema.safeParse({...base, status: "failed"}).success, false);
+  assert.equal(workflowRunSchema.safeParse({...base, status: "failed", plan: {counts: {}}}).success, false);
+  assert.equal(workflowRunSchema.safeParse({...base, status: "unknown"}).success, false);
+  assert.equal(workflowRunSchema.safeParse({...base, status: "failed", errorCode: "NOT_A_CODE"}).success, false);
 });
 test("validation diagnostics never echo private values", () => {
   assert.throws(() => validate(applicationSchema, {...snapshot().applications[0], stage: "PRIVATE_SENTINEL"}, "Application"), (error: unknown) => {

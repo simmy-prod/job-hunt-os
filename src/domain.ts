@@ -1,8 +1,9 @@
 import { z } from "zod";
-import { AppError } from "./errors.js";
+import { AppError, errorCodeSchema } from "./errors.js";
 
 export const identifier = z.string().min(1).max(200).regex(/^[a-zA-Z0-9:_-]+$/);
 export const dateOnly = z.iso.date();
+export const isoTimestamp = z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/, "Expected an ISO 8601 timestamp with seconds and a timezone offset");
 export const text = z.string().trim().min(1).max(4000);
 export const webUrl = z.url().refine((value) => {
   const url = new URL(value);
@@ -60,9 +61,28 @@ export const snapshotSchema = z.strictObject({
   }
 });
 
+// Structural check only: exactly one of `plan`/`errorCode` may be present.
+// The plan's own contents are already validated by planMorning/snapshotSchema
+// upstream, so it is kept opaque here rather than re-specified.
+export const workflowRunSchema = z.discriminatedUnion("status", [
+  z.strictObject({
+    status: z.literal("success"),
+    logicalKey: identifier,
+    observedAt: isoTimestamp,
+    plan: z.record(z.string(), z.unknown()),
+  }),
+  z.strictObject({
+    status: z.literal("failed"),
+    logicalKey: identifier,
+    observedAt: isoTimestamp,
+    errorCode: errorCodeSchema,
+  }),
+]);
+
 export type Snapshot = z.infer<typeof snapshotSchema>;
 export type Target = z.infer<typeof targetSchema>;
 export type Application = z.infer<typeof applicationSchema>;
+export type WorkflowRun = z.infer<typeof workflowRunSchema>;
 
 export function validate<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
   const result = schema.safeParse(value);
