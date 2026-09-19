@@ -244,6 +244,23 @@ scheduler write isolation, status counts, and the read-only dry run.
   failure. The generated plist passed `plutil -lint`. No real
   LaunchAgent was installed and the real Keychain was never written.
 
+### Deviation from the supplied plan
+
+1. **Design review model.** The handoff asks for an Opus design review before
+   Sonnet implements Slice 2.2. This session ran on Opus, which wrote the
+   design note (in the PR description, before any code) and also did the
+   implementation. There was no separate Sonnet implementation pass.
+2. **Built before Slices 2.0 and 2.1 merged, then reworked.** The first push
+   predated them and had its own SQLite lease. After they merged, the branch
+   merged `master` and replaced that lease with Slice 2.1's lock (decision 4).
+3. **Hourly `StartInterval`.** Not in the handoff, which names `RunAtLoad`
+   plus a daily calendar trigger. Added as the retry path and the fix for
+   the system timezone mismatch (decision 3).
+4. **`launchctl` not run by the runtime.** The handoff asks for explicit
+   install/uninstall commands. They write and remove the plist and print the
+   `launchctl` line for Simmy to run, instead of running it themselves
+   (decision 1).
+
 ### Known limitations or unresolved issues
 
 - `.runtime/logs/scheduler.log` is not rotated (Slice 2.1 retention covers
@@ -257,8 +274,9 @@ scheduler write isolation, status counts, and the read-only dry run.
 
 ### Recommended next action
 
-Review the PR. If approved, Simmy follows "Local setup" in `docs/runtime.md`
-from the main checkout and confirms one real scheduled run with
+Merged as [PR #10](https://github.com/simmy-prod/job-hunt-os/pull/10).
+Remaining step: Simmy follows "Local setup" in `docs/runtime.md` from the
+main checkout and confirms one real scheduled run with
 `npm run schedule -- status`.
 
 ---
@@ -720,6 +738,9 @@ only-on-failure contract. This was in the reviewed plan under "doctor
 expansion," not an undocumented change.
 
 ### Recommended next step
+
+**Superseded:** Slice 2.1 merged as PR #12 and Slice 2.2 merged as PR #10;
+see the Slice 2.2 section above. Original text, kept for history:
 
 Review and merge the PR for this branch. Slice 2.2 (macOS scheduling and
 recovery) requires an Opus planning/design review per
