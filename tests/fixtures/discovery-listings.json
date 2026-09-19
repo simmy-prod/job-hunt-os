@@ -1,0 +1,21 @@
+{
+  "pages": [
+    {
+      "rawListings": [
+        {"externalId": "1001", "title": "Business Analyst", "company": "Northwind Example", "url": "https://jobs.example.org/northwind/1001", "locations": ["Melbourne, AU"], "employmentType": "Full-time", "compensationText": "$70,000 - $85,000 AUD"},
+        {"externalId": "1001", "title": "Business Analyst II", "company": "Northwind Example", "url": "https://jobs.example.org/northwind/1001", "locations": ["Melbourne, AU"], "employmentType": "Full-time", "compensationText": "$70,000 - $85,000 AUD"},
+        {"externalId": "1002", "company": "Northwind Example", "url": "https://jobs.example.org/northwind/1002", "locations": ["Melbourne, AU"]}
+      ],
+      "nextCursor": "page-2"
+    },
+    {
+      "rawListings": [
+        {"externalId": "1003", "title": "Software Engineer", "company": "Northwind Example", "url": "https://jobs.example.org/northwind/1003", "locations": ["Remote"], "employmentType": "Full-time", "compensationText": "$90,000 - $110,000 AUD"},
+        {"externalId": "1004", "title": "Business Analyst", "company": "Northwind Example", "url": "https://jobs.example.org/northwind/1004", "locations": ["Melbourne, AU"], "employmentType": "Casual", "compensationText": "$45/hour"},
+        {"externalId": "1005", "title": "Coordinator", "company": "Northwind Example", "url": "https://jobs.example.org/northwind/1005", "locations": ["Melbourne, AU"], "employmentType": "Full-time"},
+        {"externalId": "1006", "title": "Administrator", "company": "Northwind Example", "url": "https://jobs.example.org/northwind/1006", "locations": ["Melbourne, AU"], "compensationText": "$65,000 - $75,000 AUD"}
+      ],
+      "nextCursor": null
+    }
+  ]
+}

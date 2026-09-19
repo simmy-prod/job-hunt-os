@@ -454,6 +454,122 @@ reports `installed, out of date` when it no longer matches.
   running job. Optionally delete the Keychain item with
   `security delete-generic-password -s job-hunt-os.notion -a NOTION_TOKEN`.
 
+## Discovery (job-source contracts, no live provider yet)
+
+`src/jobSource.ts`, `src/normalize.ts`, `src/discoveryStore.ts`, and
+`src/discovery.ts` define how a future job-board adapter's raw output would
+be turned into normalized, deduplicated listings and match decisions. **No
+live adapter exists yet** (Slice 3.1/3.2 add Greenhouse and Lever); nothing
+in this section contacts a real host, writes to Notion, submits an
+application, or sends a message. It is exercised entirely by fixtures
+(`tests/fixtures/discovery-listings.json`) and unit tests today.
+
+### Adapter boundary
+
+`JobSourceAdapter` (`src/jobSource.ts`) is the only interface allowed to
+reach a job board: `{sourceId, fetchPage(cursor)}`, returning one page of
+untrusted raw listings plus a `nextCursor` (or `null` at the end).
+`fetchAllListings` walks every page, bounded to 100 pages, and fails closed
+(`SOURCE` error) on a non-advancing cursor or a budget overrun, mirroring
+`src/notion.ts`'s pagination guard. Any adapter error that is not already a
+specific `AppError` is collapsed to a generic `SOURCE` error so a raw
+provider error never leaks into a run summary.
+
+`readOnlyJobFetch` is the same kind of transport guard as `src/notion.ts`'s
+`readOnlyFetch`: GET-only, HTTPS-only, host-allowlisted
+(`APPROVED_JOB_SOURCE_HOSTS`, currently `boards-api.greenhouse.io` and
+`api.lever.co`, the two hosts the roadmap's next slices target), no
+credentials or fragment in the URL, no redirects, bounded retries on
+transient status codes. It exists now so a future adapter cannot widen its
+own reach; no code calls it yet because no adapter exists yet.
+
+### Normalization
+
+`normalizeListing` (`src/normalize.ts`) takes one untrusted raw listing
+(already coerced by its adapter into the common shape
+`{externalId, title, company, url, locations, employmentType?, compensationText?}`)
+and either produces a `Listing` or a `DiscoveryReview`. It never throws on
+bad input: a missing or unsafe external ID, missing title/company, a missing
+or invalid URL (including one with embedded credentials), or no location
+information all become a review item with an explicit reason, never a
+guessed listing and never a failed run. `employmentType` and
+`compensationText` are genuinely optional on the raw listing (most real
+postings omit pay, and not every provider labels employment type): their
+absence never blocks normalization, it is preserved as `null` on the
+`Listing`, and it is `evaluateMatch`, not normalization, that decides what an
+absent value means for role fit. `normalizeBatch` runs this over every raw
+listing from one source's fetch and collapses repeated external IDs within
+that batch into one listing, deterministically (the last occurrence in fetch
+order wins), reporting the collision count as `duplicatesInBatch` rather
+than silently dropping it.
+
+A listing's identity, `${sourceId}:${externalId}`, is a pure function of the
+adapter's own field values, not a counter: re-normalizing the same raw
+listing on a later run always produces the same id. `contentHashOf` hashes
+`title`/`company`/`canonicalUrl`/`locations` (sorted, so reordering alone
+never counts as a change) plus `employmentType`/`compensationText`, so a
+provider adding a salary range or relabeling employment type on the same
+listing counts as changed content, not a no-op.
+
+### Matching
+
+`evaluateMatch` (`src/normalize.ts`) judges one normalized `Listing` against
+a private matching configuration (`targets/matching.json`, gitignored, from
+`templates/matching-config.json`; schema in `src/matchingConfig.ts`):
+`titleIncludeKeywords`, `titleExcludeKeywords`, `allowedEmploymentTypes`
+(`null` means no restriction), and `requireCompensation`, plus a
+`ruleVersion` recorded on every decision. Every signal is evaluated, not
+short-circuited on the first hit, with a fixed precedence:
+
+1. Any disqualifying signal (an excluded title keyword, or a *known*
+   employment type outside `allowedEmploymentTypes`) makes the decision
+   `not_a_match`, regardless of anything else.
+2. Otherwise, any ambiguous signal (an *unknown* employment type when
+   `allowedEmploymentTypes` is set, or missing pay when
+   `requireCompensation` is `true`) makes it `needs_review`. A title that
+   would otherwise match is still sent to review here, never guessed.
+3. Otherwise, at least one included title keyword makes it `match`.
+4. Otherwise (no disqualifying, ambiguous, or included signal) it is
+   `needs_review`.
+
+The shipped template is permissive (`allowedEmploymentTypes: null`,
+`requireCompensation: false`), since most real postings omit pay and not
+every source labels employment type; a stricter local `targets/matching.json`
+can opt into both checks. This is the only place discovery reads search
+criteria; it never reads `profile/` or `pipeline/`, and no listing's content
+is ever sent anywhere in this slice.
+
+### Persistence and the review queue
+
+`DiscoveryStore` (`src/discoveryStore.ts`) is a private local store at
+`.runtime/discovery.sqlite`, built with the same safety rules as
+`src/ledger.ts`'s `runs.sqlite` (real directory only, no symlink, mode
+0700/0600, no multi-linked database file) but a separate file: discovery
+state and morning-plan run history are independent concerns.
+
+- `mergeListings` upserts by listing id. A changed listing updates its row
+  in place (reported in `changed`) and keeps its original `firstSeenAt`; a
+  new id is inserted (`added`) with `firstSeenAt == lastSeenAt`. A listing
+  absent from the current run's `incoming` set (a different source, or a
+  source that failed this run) is never touched, let alone deleted: an
+  unavailable source must not erase what was previously discovered.
+- `upsertReviews` maintains an open review queue keyed by
+  `(sourceId, externalId)`, so a listing that fails to normalize the same
+  way on every run stays one row, not one row per run. A review with no
+  usable external ID is never persisted; there is nothing stable to key it
+  by, so it is only ever visible in the run summary that observed it.
+  `mergeListings` deletes a matching review row the moment that same
+  `(sourceId, externalId)` normalizes cleanly, so the queue only ever holds
+  currently-open problems.
+
+`runDiscovery` (`src/discovery.ts`) runs every configured adapter
+independently: one source's failure is recorded in that source's own
+`SourceOutcome` (`ok`, `errorCode`, `fetched`, `duplicatesInBatch`) and never
+prevents another source's listings from being fetched, normalized, merged,
+or matched. Nothing in this function can mark a listing applied, write to
+Notion, or send a message; it only reads adapters and writes the local
+discovery store.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
@@ -462,6 +578,7 @@ reports `installed, out of date` when it no longer matches.
 | `SCHEMA` error naming a property | The live Notion property was renamed, retyped, or removed | Update `targets/runtime.json`'s `fields` (and `frequency.property` if applicable) to match the current schema, or fix the schema |
 | `CONFIG` error on startup | `targets/runtime.json` missing, not valid JSON, or fails the config schema; or `--at` is not a full ISO timestamp with offset | Recreate the config from `templates/runtime-config.json`; pass `--at` as e.g. `2026-09-18T09:00:00+10:00` |
 | `NOTION` error mid-run | Transient Notion outage, network failure, or pagination did not advance | Retry later; this never leaves a stale successful plan for the same logical run key |
+| `SOURCE` error on a discovery adapter | Job-source outage, network failure, or pagination did not advance | Isolated to that source's own `SourceOutcome` by `runDiscovery`; other sources and previously stored listings are unaffected |
 | `STORAGE` error | `.runtime/` is missing write permission, is a symlink, or the ledger file/journal has an unexpected link count | Fix local file permissions on `.runtime/`; do not hand-edit `.runtime/runs.sqlite` |
 | `POLICY` error | The read-only transport blocked a request that did not match the one allowed GET and the one allowed POST | This indicates a code defect, not a configuration problem; do not work around it by relaxing the transport |
 | `CONFIG` error naming `--dry-run`/`--no-record` on `doctor` or `status` | Those flags only apply to `plan` | Drop them; `doctor` and `status` are always read-only and never write to the ledger |
