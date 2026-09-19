@@ -294,7 +294,7 @@ begin Slice 2.1 until this slice is explicitly approved.
 Branch `feature/slice-2.1-operational-readiness`. Started from `origin/master`
 at `baf6e34` (the gate-cleanup commit); Slice 2.0 (PR #9) landed on
 `origin/master` partway through this session, so the branch was rebased onto
-it (`c793de1`) before continuing — conflicts were limited to `src/errors.ts`
+it (`c793de1`) before continuing; conflicts were limited to `src/errors.ts`
 (both slices touched `ErrorCode`) and `src/workflow.ts` (both touched
 `runMorning`'s options), resolved by keeping Slice 2.0's `errorCodeSchema`/
 `dryRun` behavior and layering this slice's lock/retention additions on top.
@@ -306,8 +306,8 @@ no scheduler, Notion write, job-board discovery, or new runtime dependency.
 
 - **`status` command** (`src/cli.ts`, reading `RunLedger.readLatest` in
   `src/ledger.ts`): reports `never_run` / `success` / `failed` / `stale` for
-  the current configuration by reading only the local ledger — no source
-  read, no Notion call, no lock. Never creates `.runtime` as a side effect of
+  the current configuration by reading only the local ledger (no source
+  read, no Notion call, no lock). Never creates `.runtime` as a side effect of
   running. Output never includes business data (`plan_json`/`digest`), only
   `{state, date, timezone, latestRunDate, revision, errorCode}`.
 - **`doctor` expansion** (`src/doctor.ts`, new): restructured into five
@@ -329,7 +329,7 @@ no scheduler, Notion write, job-board discovery, or new runtime dependency.
   lock a different process has since legitimately acquired.
 - **Ledger retention** (`src/ledger.ts`): `record()` now prunes `runs` rows
   older than 90 days and `events` rows older than 180 days, by `observedAt`,
-  in the same transaction as the write — atomic, no new command or schedule.
+  in the same transaction as the write: atomic, no new command or schedule.
 - New `ErrorCode` value `"LOCKED"`; `exitCodeFor` (`src/errors.ts`) is now the
   single shared exit-code mapping used by both the top-level CLI error
   handler and `doctor`'s own (non-throwing) exit-code selection.
@@ -397,7 +397,7 @@ no scheduler, Notion write, job-board discovery, or new runtime dependency.
    read/plan/write should never legitimately approach 6 hours.
 5. **Retention is unconditional inside `record()`, not a separate `--prune`
    flag or command.** The deliverables ask to "define retention," and an
-   opt-in prune command would need someone to remember to run it — the whole
+   opt-in prune command would need someone to remember to run it, and the whole
    point of this slice is removing things an unattended run must not depend
    on a human remembering to do.
 
@@ -410,8 +410,8 @@ All commands run from the worktree root on
 |---|---|
 | `npm run typecheck` | Pass |
 | `npm run lint` | Pass |
-| `npm test` | 96/96 pass (70 existing + 26 new: 6 lock tests, 12 doctor tests, 4 ledger tests — retention plus 3 `readLatest` cases, 4 CLI `status`/rejection cases) |
-| `npm run privacy:check` | Pass — confirmed `src/lock.ts`/`src/doctor.ts` use only already-allowlisted imports (`node:fs`, `node:path`, `node:crypto`, `zod`), no `node:child_process` |
+| `npm test` | 96/96 pass (70 existing + 26 new: 6 lock tests, 12 doctor tests, 4 ledger tests, retention plus 3 `readLatest` cases, 4 CLI `status`/rejection cases) |
+| `npm run privacy:check` | Pass (confirmed `src/lock.ts`/`src/doctor.ts` use only already-allowlisted imports: `node:fs`, `node:path`, `node:crypto`, `zod`, no `node:child_process`) |
 | `npm run check` (chained) | Pass end to end |
 | `npm run build:public` | Pass, same allowlisted `.public/index.html` + `.public/data.json` output |
 | `git diff --check` | Clean |
@@ -421,7 +421,7 @@ All commands run from the worktree root on
 
 One local cleanup note: the manual smoke test above was run once against the
 actual worktree root (not a scratch copy) before its `.runtime/` and
-`.public/` output were deleted with `rm -rf` prior to committing — both are
+`.public/` output were deleted with `rm -rf` prior to committing; both are
 gitignored and were never staged, but noted here for transparency since nothing
 outside this session's own throwaway artifacts was touched.
 

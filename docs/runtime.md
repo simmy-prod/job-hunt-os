@@ -181,13 +181,13 @@ reading the source or contacting Notion: it looks up the most recent
 (`logicalKeyPrefix` in `src/workflow.ts`) and reports one of four states:
 
 - `never_run`: no matching row exists yet (including when `.runtime` itself
-  has never been created — `status` never creates it).
+  has never been created; `status` never creates it).
 - `stale`: a row exists, but its date does not match today's Melbourne
   business date. The workflow has not completed a run for today yet, whether
   or not yesterday's run succeeded.
 - `success` / `failed`: a row exists for today's date, with that status.
   `failed` also reports the recorded `errorCode` (the safe `AppError` code
-  only, e.g. `"NOTION"` — never a message or business data).
+  only, e.g. `"NOTION"`, never a message or business data).
 
 `status` never reports `plan_json` or `digest`; its JSON output is
 `{state, date, timezone, latestRunDate, revision, errorCode}` only.
@@ -224,8 +224,8 @@ deliberate `AppError` into a generic, non-leaking message.
 instance lock over the complete workflow, including the remote Notion read:
 two overlapping `plan` invocations (a manual run racing a stray scheduled
 one, say) cannot both read the source and write the ledger at once. The lock
-is only engaged when a run would actually touch local state — i.e. when
-`record` is true and `--dry-run` was not passed — mirroring exactly when the
+is only engaged when a run would actually touch local state (i.e. when
+`record` is true and `--dry-run` was not passed), mirroring exactly when the
 ledger itself gets touched, so `--no-record`/`--dry-run` keep their existing
 "no local footprint at all" guarantee. `doctor` and `status` never take the
 lock; neither one writes to the ledger.
@@ -237,7 +237,7 @@ checks whether it is stale before giving up:
 
 - the recorded `pid` is no longer running (`process.kill(pid, 0)` raises
   `ESRCH`), or
-- the lock is older than 6 hours regardless of `pid` liveness — far longer
+- the lock is older than 6 hours regardless of `pid` liveness, far longer
   than any real run against one Notion database should take, and a guard
   against the recorded `pid` having since been reused by an unrelated
   process.
@@ -245,7 +245,7 @@ checks whether it is stale before giving up:
 A stale lock is deleted and acquisition retried once; if the retry also
 fails (another process legitimately raced us), or the existing lock is not
 stale, `acquireLock` throws `LOCKED` (exit code `5`) rather than silently
-serializing or blocking — an unattended run should fail loudly, not wait.
+serializing or blocking: an unattended run should fail loudly, not wait.
 Releasing a lock re-reads the file first and only removes it if its `token`
 still matches the one this process wrote, so a release can never delete a
 lock a different process has since legitimately acquired (for example, after
